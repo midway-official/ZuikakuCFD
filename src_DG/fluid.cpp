@@ -324,52 +324,83 @@ void exchangeColumns(MatrixXd& matrix, int rank, int num_procs)
     if (right_rank != MPI_PROC_NULL)
         std::memcpy(matrix.data()+(cols-3)*rows, recv_right.data(), count*sizeof(double));
 }
-
-// ============================================================================
-// exchangeConservativeColumns（DG 版）
-//
-// 优化：将 4 变量 × DG_NM 模式的 ghost 列数据打包进 2 次 MPI_Sendrecv
-//       避免原始版本的 4×DG_NM=36 次独立通信
-// ============================================================================
 void exchangeConservativeColumns(Mesh& mesh, int rank, int num_procs)
 {
-    const int rows = mesh.ny, cols = mesh.nx;
-    const int count_per = rows * 3;                // 每个矩阵左/右各 3 列
-    const int total     = 4 * DG_NM * count_per;  // 打包总量
+    const int rows = mesh.ny;
+    const int cols = mesh.nx;
+    
+    // 基础单元：每个 (variable, mode) 需要交换的列数（通常是 3 列 ghost cells）
+    const int ghost_width = 3;
+    const size_t count_per_field = static_cast<size_t>(rows) * ghost_width;
+    const size_t total_elements = 4 * DG_NM * count_per_field;
 
     int left_rank  = (rank == 0)             ? MPI_PROC_NULL : rank - 1;
     int right_rank = (rank == num_procs - 1) ? MPI_PROC_NULL : rank + 1;
 
-    vector<double> send_L(total), send_R(total), recv_L(total), recv_R(total);
+    // 预留足够的空间
+    std::vector<double> send_to_left(total_elements, 0.0);
+    std::vector<double> send_to_right(total_elements, 0.0);
+    std::vector<double> recv_from_left(total_elements, 0.0);
+    std::vector<double> recv_from_right(total_elements, 0.0);
 
-    // 打包：按 [变量][模式][列] 顺序
-    for (int c = 0; c < 4; ++c)
+    // --- 1. 谨慎打包 (Packing) ---
+    for (int c = 0; c < 4; ++c) {
         for (int m = 0; m < DG_NM; ++m) {
-            int off = (c*DG_NM + m) * count_per;
-            const double* base = mesh.dof[c][m].data();
-            std::memcpy(send_L.data()+off, base + 3*rows,       count_per*sizeof(double));
-            std::memcpy(send_R.data()+off, base + (cols-6)*rows, count_per*sizeof(double));
+            size_t offset = (static_cast<size_t>(c) * DG_NM + m) * count_per_field;
+            const double* field_data = mesh.dof[c][m].data();
+
+            // 发送给左邻居的数据：取当前块的“内部左边界”（跳过 ghost 列）
+            // 假设 matrix.data() 布局为 [col0][col1]... 
+            // 如果 exchangeColumns 取的是 matrix.data() + 3*rows，这里也应保持一致
+            std::memcpy(&send_to_left[offset], 
+                        field_data + ghost_width * rows, 
+                        count_per_field * sizeof(double));
+
+            // 发送给右邻居的数据：取当前块的“内部右边界”
+            std::memcpy(&send_to_right[offset], 
+                        field_data + (cols - 2 * ghost_width) * rows, 
+                        count_per_field * sizeof(double));
         }
+    }
 
-    MPI_Sendrecv(send_L.data(), total, MPI_DOUBLE, left_rank,  0,
-                 recv_L.data(), total, MPI_DOUBLE, left_rank,  1,
-                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    MPI_Sendrecv(send_R.data(), total, MPI_DOUBLE, right_rank, 1,
-                 recv_R.data(), total, MPI_DOUBLE, right_rank, 0,
+    // --- 2. 稳健通信 (Communication) ---
+    // 使用明确的 Tag 区分左右方向，防止在某些 MPI 实现下发生混淆
+    MPI_Request requests[4];
+    
+    // 向左交换
+    MPI_Sendrecv(send_to_left.data(),  (int)total_elements, MPI_DOUBLE, left_rank,  10,
+                 recv_from_left.data(), (int)total_elements, MPI_DOUBLE, left_rank,  11,
                  MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-    // 解包
-    for (int c = 0; c < 4; ++c)
+    // 向右交换
+    MPI_Sendrecv(send_to_right.data(), (int)total_elements, MPI_DOUBLE, right_rank, 11,
+                 recv_from_right.data(), (int)total_elements, MPI_DOUBLE, right_rank, 10,
+                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    // --- 3. 谨慎解包 (Unpacking) ---
+    for (int c = 0; c < 4; ++c) {
         for (int m = 0; m < DG_NM; ++m) {
-            int off = (c*DG_NM + m) * count_per;
-            double* base = mesh.dof[c][m].data();
-            if (left_rank  != MPI_PROC_NULL)
-                std::memcpy(base, recv_L.data()+off, count_per*sizeof(double));
-            if (right_rank != MPI_PROC_NULL)
-                std::memcpy(base+(cols-3)*rows, recv_R.data()+off, count_per*sizeof(double));
-        }
+            size_t offset = (static_cast<size_t>(c) * DG_NM + m) * count_per_field;
+            double* field_data = mesh.dof[c][m].data();
 
-    // 同步单元平均值
+            // 如果左边有邻居，将收到的数据放入最左侧 ghost 区域 (col 0~2)
+            if (left_rank != MPI_PROC_NULL) {
+                std::memcpy(field_data, 
+                            &recv_from_left[offset], 
+                            count_per_field * sizeof(double));
+            }
+
+            // 如果右边有邻居，将收到的数据放入最右侧 ghost 区域 (col cols-3~cols-1)
+            if (right_rank != MPI_PROC_NULL) {
+                std::memcpy(field_data + (cols - ghost_width) * rows, 
+                            &recv_from_right[offset], 
+                            count_per_field * sizeof(double));
+            }
+        }
+    }
+
+    // --- 4. 基础变量同步 --
+
     mesh.syncCellAverages();
 }
 
@@ -822,36 +853,45 @@ void updateMesh(Mesh& mesh, double dt, int rank, int num_procs)
         for (int m = 0; m < DG_NM; ++m)
             dof_n[c][m] = mesh.dof[c][m];
     }
-
+    exchangeConservativeColumns(mesh, rank, num_procs);
     // RHS 缓冲区
     vector<MatrixXd> dU[4];
     for (int c = 0; c < 4; ++c)
         dU[c].resize(DG_NM, MatrixXd::Zero(ny, nx));
-
+    exchangeConservativeColumns(mesh, rank, num_procs);
     // ── Stage 1：U* = U^n + dt·L(U^n) ──────────────────────────────────
     computeRHS(mesh, dt, dU);
+    exchangeConservativeColumns(mesh, rank, num_procs);
     for (int c = 0; c < 4; ++c)
         for (int m = 0; m < DG_NM; ++m)
             mesh.dof[c][m] = dof_n[c][m] + dt * dU[c][m];
+    exchangeConservativeColumns(mesh, rank, num_procs);        
     applyLimiter(mesh);
+    exchangeConservativeColumns(mesh, rank, num_procs);
     mesh.syncCellAverages();
     exchangeConservativeColumns(mesh, rank, num_procs);
 
     // ── Stage 2：U** = 3/4·U^n + 1/4·(U* + dt·L(U*)) ───────────────────
     computeRHS(mesh, dt, dU);
+    exchangeConservativeColumns(mesh, rank, num_procs);
     for (int c = 0; c < 4; ++c)
         for (int m = 0; m < DG_NM; ++m)
             mesh.dof[c][m] = 0.75*dof_n[c][m] + 0.25*(mesh.dof[c][m] + dt*dU[c][m]);
+    exchangeConservativeColumns(mesh, rank, num_procs);        
     applyLimiter(mesh);
+    exchangeConservativeColumns(mesh, rank, num_procs);
     mesh.syncCellAverages();
     exchangeConservativeColumns(mesh, rank, num_procs);
 
     // ── Stage 3：U^{n+1} = 1/3·U^n + 2/3·(U** + dt·L(U**)) ─────────────
     computeRHS(mesh, dt, dU);
+    exchangeConservativeColumns(mesh, rank, num_procs);
     for (int c = 0; c < 4; ++c)
         for (int m = 0; m < DG_NM; ++m)
             mesh.dof[c][m] = (1.0/3.0)*dof_n[c][m] + (2.0/3.0)*(mesh.dof[c][m] + dt*dU[c][m]);
+    exchangeConservativeColumns(mesh, rank, num_procs);        
     applyLimiter(mesh);
+    exchangeConservativeColumns(mesh, rank, num_procs);
     mesh.syncCellAverages();
     exchangeConservativeColumns(mesh, rank, num_procs);
 }
