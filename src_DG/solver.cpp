@@ -37,6 +37,8 @@ inline double dgCFLLimit() {
 
 /// 由当前场的最大波速计算 DG 安全时间步
 inline double dgSafeDt(double lambda_max, double h) {
+    const double eps = 1e-7;
+    lambda_max = std::max(lambda_max, eps);
     return dgCFLLimit() * h / lambda_max;
 }
 
@@ -220,7 +222,7 @@ int main(int argc, char* argv[])
     const double h         = local_mesh.da;
     const double cfl_limit = dgCFLLimit();
     const double dt_safe   = dgSafeDt(global_umax, h);
-
+    double physical_time = 0.0;
     double dt;
     if (auto_dt) {
         dt = dt_safe;
@@ -319,14 +321,17 @@ int main(int argc, char* argv[])
         auto t0 = now();
         updateMesh(local_mesh, dt, rank, num_procs);
         compute_ms += elapsed_ms(t0, now());
+        physical_time += dt;
 
         // ── 进度输出 ──────────────────────────────────────────────────────
         if (rank == 0 && (step + 1) % print_interval == 0) {
             double used = elapsed_ms(wall_start, now());
             double eta  = used / (step + 1) * (timesteps - step - 1);
             std::cout << std::fixed << std::setprecision(2)
-                      << std::setw(6) << (step + 1) << " / " << timesteps
-                      << "  dt=" << std::setprecision(6) << dt
+                      << std::setw(6) << (step + 1) << " / " << timesteps                      
+                      << "  dt=" << std::setprecision(12) << dt
+                      << "  t="  << std::setprecision(6) << physical_time
+
                       << "  已用: " << std::setprecision(2) << used / 1000.0 << " s"
                       << "  预计剩余: " << eta / 1000.0 << " s\n";
         }

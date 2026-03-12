@@ -675,7 +675,22 @@ void computeRHS(Mesh& mesh, double dt,
         }
     }
 }
+inline double basis(int m, double xi, double eta)
+{
+    int px = mpx(m);
+    int py = mpy(m);
 
+    // Legendre P0, P1, P2
+    auto P = [](int p, double x)
+    {
+        if (p == 0) return 1.0;
+        if (p == 1) return x;
+        if (p == 2) return 0.5*(3.0*x*x-1.0);
+        return 0.0;
+    };
+
+    return P(px,xi) * P(py,eta);
+}
 void applyLimiter(Mesh& mesh) {
     const int ny = mesh.ny, nx = mesh.nx;
     const double h  = mesh.da;
@@ -742,6 +757,48 @@ void applyLimiter(Mesh& mesh) {
             }
         }
     }
+for (int i=1;i<ny-1;i++)
+for (int j=1;j<nx-1;j++)
+{
+    bool bad = false;
+
+    // 检查 4 个角点
+    const double xi[4]  = {-1,1,-1,1};
+    const double eta[4] = {-1,-1,1,1};
+
+    for(int q=0;q<4;q++)
+    {
+        double rho=0,mx=0,my=0,E=0;
+
+        for(int m=0;m<DG_NM;m++)
+        {
+            double phi = basis(m,xi[q],eta[q]);
+
+            rho += mesh.dof[0][m](i,j)*phi;
+            mx  += mesh.dof[1][m](i,j)*phi;
+            my  += mesh.dof[2][m](i,j)*phi;
+            E   += mesh.dof[3][m](i,j)*phi;
+        }
+
+        double u = mx/rho;
+        double v = my/rho;
+
+        double p=(mesh.gamma-1)*(E-0.5*rho*(u*u+v*v));
+
+        if(rho<=1e-8 || p<=1e-8)
+        {
+            bad=true;
+            break;
+        }
+    }
+
+    if(bad)
+    {
+        for(int c=0;c<4;c++)
+        for(int m=1;m<DG_NM;m++)
+            mesh.dof[c][m](i,j)=0.0;
+    }
+}
 }
 // ============================================================================
 // updateMesh — SSP-RK3 时间推进
