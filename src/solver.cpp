@@ -165,7 +165,6 @@ int main(int argc, char* argv[])
 
         // 定期输出
         if((step + 1) % output_interval == 0) {
-            recoverPrimitives(local_mesh);
             std::string folder = "result/" + std::to_string(step + 1);
             if(rank == 0) fs::create_directories(folder);
             MPI_Barrier(MPI_COMM_WORLD);
