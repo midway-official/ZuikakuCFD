@@ -85,9 +85,6 @@ int main(int argc, char* argv[])
         
         for(int step = 0; step < timesteps; ++step) {
             
-            // 交换守恒变量的边界列
-            exchangeConservativeColumns(local_mesh, rank, num_procs);
-            
             // 更新本地网格
             updateMesh(local_mesh, dt, rank, num_procs);
             
