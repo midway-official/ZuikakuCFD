@@ -28,7 +28,7 @@ inline double elapsed_ms(TimePoint s, TimePoint e) {
 //
 // 注：此处 CFL 定义为  ν = λ_max · Δt / h（无量纲），
 //     与 FV 的 CFL ≤ 0.5 **不可直接比较**。
-// ============================================================================
+// =============================================================================
 static constexpr double DG_CFL_SAFETY = 0.9;   // 留 10% 安全余量
 
 inline double dgCFLLimit() {
@@ -38,6 +38,62 @@ inline double dgCFLLimit() {
 /// 由当前场的最大波速计算 DG 安全时间步
 inline double dgSafeDt(double lambda_max, double h) {
     return dgCFLLimit() * h / lambda_max;
+}
+
+// =============================================================================
+// [修复 1] computeMaxSpeedDG
+//
+// 原版 computeMaxSpeed 只遍历单元平均值（模式 0），低估了 DG 多项式在界面处
+// 的实际波速。DG 数值通量 HLLC 使用的是界面处的重构值：
+//
+//   U(ξ=±1, η=±1) = Σ_m û_m · φ_m(±1, ±1)
+//
+// 对 P=2，L_2(±1) = 1，界面处修正量 ≈ û_{2,0} + û_{0,2}，量级不可忽略。
+//
+// 此函数对每个内部单元的 4 个角点求波速，取全局最大值。
+// 角点覆盖了所有 4 条界面的两端，已足以估计最坏情况。
+// =============================================================================
+static double computeMaxSpeedDG(const Mesh& mesh)
+{
+    const double gam = mesh.gamma;
+    constexpr double eps = 1e-12;
+
+    // 4 个界面角点的参考坐标
+    const double XI [4] = {-1.0, +1.0, -1.0, +1.0};
+    const double ETA[4] = {-1.0, -1.0, +1.0, +1.0};
+
+    double umax = 0.0;
+
+    for (int i = 0; i < mesh.ny; ++i) {
+        for (int j = 0; j < mesh.nx; ++j) {
+            if (mesh.bctype(i, j) != 0) continue;
+
+            for (int k = 0; k < 4; ++k) {
+                double xi = XI[k], eta = ETA[k];
+
+                // DG 多项式重构：U(xi,eta) = Σ_m û_m φ_m(xi,eta)
+                double U[4] = {0.0, 0.0, 0.0, 0.0};
+                for (int m = 0; m < DG_NM; ++m) {
+                    double b = phi2(m, xi, eta);
+                    U[0] += mesh.dof[0][m](i, j) * b;
+                    U[1] += mesh.dof[1][m](i, j) * b;
+                    U[2] += mesh.dof[2][m](i, j) * b;
+                    U[3] += mesh.dof[3][m](i, j) * b;
+                }
+
+                double rho = std::max(U[0], eps);
+                double u   = U[1] / rho;
+                double v   = U[2] / rho;
+                double p   = std::max((gam - 1.0) * (U[3] - 0.5 * rho * (u*u + v*v)), eps);
+                double a   = std::sqrt(gam * p / rho);
+                double spd = std::sqrt(u*u + v*v) + a;
+
+                umax = std::max(umax, spd);
+            }
+        }
+    }
+
+    return umax;
 }
 
 // ==================== 性能报告 ====================
@@ -73,9 +129,9 @@ void printPerfReport(int rank, int num_procs,
               << "  (占总时间 "
               << std::setprecision(1) << global_io_max / wall_ms * 100.0 << "%)\n";
 
-    double max_t    = *std::max_element(all_compute.begin(), all_compute.end());
-    double min_t    = *std::min_element(all_compute.begin(), all_compute.end());
-    double avg_t    = std::accumulate(all_compute.begin(), all_compute.end(), 0.0) / num_procs;
+    double max_t     = *std::max_element(all_compute.begin(), all_compute.end());
+    double min_t     = *std::min_element(all_compute.begin(), all_compute.end());
+    double avg_t     = std::accumulate(all_compute.begin(), all_compute.end(), 0.0) / num_procs;
     double imbalance = (avg_t > 0) ? max_t / avg_t : 1.0;
 
     std::cout << "\n  ── 负载均衡 ──────────────────────────\n"
@@ -87,7 +143,7 @@ void printPerfReport(int rank, int num_procs,
               << "  " << std::string(36, '-') << "\n";
 
     for (int i = 0; i < num_procs; ++i) {
-        double pct    = (max_t > 0) ? all_compute[i] / max_t * 100.0 : 0.0;
+        double pct     = (max_t > 0) ? all_compute[i] / max_t * 100.0 : 0.0;
         int    bar_len = (int)(pct / 10.0);
         std::cout << std::setw(6)  << i
                   << std::setw(14) << all_compute[i]
@@ -131,11 +187,11 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    std::string mesh_folder  = argv[1];
-    std::string dt_arg       = argv[2];
-    int         timesteps    = std::stoi(argv[3]);
-    bool        auto_dt      = (dt_arg == "auto");
-    double      dt_user      = auto_dt ? 0.0 : std::stod(dt_arg);
+    std::string mesh_folder = argv[1];
+    std::string dt_arg      = argv[2];
+    int         timesteps   = std::stoi(argv[3]);
+    bool        auto_dt     = (dt_arg == "auto");
+    double      dt_user     = auto_dt ? 0.0 : std::stod(dt_arg);
 
     // ── 加载 & 分割网格 ───────────────────────────────────────────────────
     if (rank == 0) std::cout << "正在加载网格...\n";
@@ -152,26 +208,21 @@ int main(int argc, char* argv[])
 
     // ── CFL 检查与 dt 确定 ────────────────────────────────────────────────
     //
-    // DG 的 CFL 无量纲数定义（与 FV 相同的定义式）：
-    //   ν = λ_max · Δt / h
-    //
-    // 但 DG P 阶的稳定上限远低于 FV：
-    //   ν_lim(DG, P=2, 2D) ≈ 0.10   vs.   ν_lim(FV) ≈ 0.50
-    //
-    // 原因：DG 在每个单元内的多项式自由度更多，
-    //       局部特征速度由最高阶导数主导，有效步长收紧为 h/(2P+1)。
+    // [修复 1] 使用 computeMaxSpeedDG 代替 computeMaxSpeed：
+    //   后者只读单元平均值（模式 0），会低估 DG 界面处的实际波速。
+    //   computeMaxSpeedDG 对每格 4 个角点做多项式重构后求波速，
+    //   正确反映 HLLC 数值通量实际遇到的最大特征速度。
     // ─────────────────────────────────────────────────────────────────────
-    double local_umax = computeMaxSpeed(local_mesh, local_mesh.gamma);
+    double local_umax  = computeMaxSpeedDG(local_mesh);
     double global_umax = 0.0;
     MPI_Allreduce(&local_umax, &global_umax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
 
     const double h         = local_mesh.da;
-    const double cfl_limit = dgCFLLimit();          // ≈ 0.090 for P=2, 2D
+    const double cfl_limit = dgCFLLimit();
     const double dt_safe   = dgSafeDt(global_umax, h);
 
     double dt;
     if (auto_dt) {
-        // 用 CFL 安全上限自动设定 dt
         dt = dt_safe;
         if (rank == 0)
             std::cout << "自动 dt 模式：dt = " << dt
@@ -180,7 +231,6 @@ int main(int argc, char* argv[])
         dt = dt_user;
     }
 
-    // 计算实际 CFL 数（用于检查，无论哪种模式都输出）
     double cfl_actual = global_umax * dt / h;
 
     if (rank == 0) {
@@ -192,7 +242,7 @@ int main(int argc, char* argv[])
                   << "时间步数   : " << timesteps    << "\n"
                   << "MPI进程数  : " << num_procs    << "\n"
                   << "格子尺寸 h : " << h            << "\n"
-                  << "最大波速   : " << global_umax  << "\n"
+                  << "最大波速(DG界面重构) : " << global_umax << "\n"
                   << "--------------------------------\n"
                   << "DG CFL 信息（P=" << DG_P << ", 2D, SSP-RK3）\n"
                   << "  安全上限  ν_lim = 1/(2·(2P+1)) · safety\n"
@@ -201,16 +251,13 @@ int main(int argc, char* argv[])
                   << "  安全 dt          = " << dt_safe   << "\n"
                   << "  实际 ν = λΔt/h   = " << cfl_actual << "\n";
 
-        // ── CFL 判定（DG 专用阈值）──────────────────────────────────────
         if (cfl_actual > cfl_limit) {
-            // 超过 DG 稳定上限：强制终止
             std::cerr << "\n[错误] CFL 数 " << cfl_actual
                       << " 超过 DG P=" << DG_P
                       << " 稳定上限 " << cfl_limit << "\n"
                       << "       建议 dt ≤ " << dt_safe << "\n"
                       << "       或使用 'auto' 自动设定 dt\n";
         } else if (cfl_actual > cfl_limit * 0.8) {
-            // 接近上限（80%~100%）：警告但继续
             std::cerr << "\n[警告] CFL 数 " << cfl_actual
                       << " 接近 DG 稳定上限 " << cfl_limit
                       << "，建议适当减小 dt\n";
@@ -220,10 +267,9 @@ int main(int argc, char* argv[])
         std::cout << "================================\n\n开始时间步进...\n";
     }
 
-    // 若 CFL 超限，所有进程同步后退出（避免 MPI 悬挂）
-    int cfl_ok = (cfl_actual <= cfl_limit) ? 1 : 0;
-    MPI_Bcast(&cfl_ok, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    if (!cfl_ok) {
+    // [说明] cfl_actual 由 global_umax（MPI_Allreduce）和相同的 dt/h 计算得出，
+    // 各进程值完全一致，无需 Bcast。直接用本地值判断即可。
+    if (cfl_actual > cfl_limit) {
         MPI_Finalize();
         return 1;
     }
@@ -231,20 +277,42 @@ int main(int argc, char* argv[])
     // ── 主时间步循环 ──────────────────────────────────────────────────────
     double compute_ms = 0.0;
     double io_ms      = 0.0;
-    const int print_interval  = std::max(1, timesteps / 1000);
-    const int output_interval = 100;
-    // 每隔多少步重新评估一次 CFL（场量变化后 λ_max 可能改变）
-    const int cfl_recheck_interval = 50;
+    const int print_interval        = std::max(1, timesteps / 1000);
+    const int output_interval       = 100;
+    const int cfl_recheck_interval  = 50;
 
     for (int step = 0; step < timesteps; ++step)
     {
-        // ── 定期重新计算最大波速并动态调整 dt ──────────────────────────
-        // 重要：DG 稳定余量窄，初始 dt 在流场演化后可能失效
-        if (auto_dt && step > 0 && step % cfl_recheck_interval == 0) {
-            double lmax_local  = computeMaxSpeed(local_mesh, local_mesh.gamma);
+        // ── 定期重新计算最大波速（无论 auto_dt 与否均执行）─────────────
+        //
+        // [修复 2] 原代码只在 auto_dt 模式下重算波速，固定 dt 模式完全
+        // 不检查，流场激波增强后可能无声发散。
+        //
+        // 修复策略：
+        //   - auto_dt 模式：重算后更新 dt（行为不变）
+        //   - 固定 dt 模式：仅检查并输出警告，dt 不变
+        // ─────────────────────────────────────────────────────────────────
+        if (step > 0 && step % cfl_recheck_interval == 0) {
+            // [修复 1] 动态重算同样使用 computeMaxSpeedDG
+            double lmax_local  = computeMaxSpeedDG(local_mesh);
             double lmax_global = 0.0;
             MPI_Allreduce(&lmax_local, &lmax_global, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-            dt = dgSafeDt(lmax_global, h);
+
+            if (auto_dt) {
+                dt = dgSafeDt(lmax_global, h);
+            } else {
+                // [修复 2] 固定 dt 模式：检查 CFL 是否超限，超限时输出警告
+                double cfl_now = lmax_global * dt / h;
+                if (rank == 0 && cfl_now > cfl_limit) {
+                    std::cerr << std::fixed << std::setprecision(6)
+                              << "[警告] 第 " << step << " 步：CFL = " << cfl_now
+                              << " 超过稳定上限 " << cfl_limit
+                              << "  (λ_max=" << lmax_global
+                              << ", dt=" << dt << ")\n"
+                              << "         固定dt模式无法自动调整，"
+                              << "建议减小dt或改用 'auto' 模式\n";
+                }
+            }
         }
 
         // ── 计算 ─────────────────────────────────────────────────────────

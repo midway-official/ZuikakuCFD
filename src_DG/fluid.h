@@ -115,7 +115,7 @@ void exchangeColumns(MatrixXd& matrix, int rank, int num_procs);
 
 /// @brief 一次性交换 4 个变量 × DG_NM 个模式的 ghost 列数据
 void exchangeConservativeColumns(Mesh& mesh, int rank, int num_procs);
-
+double phi2(int m, double xi, double eta) noexcept;
 // ============================================================================
 // DG 核心求解器
 // ============================================================================
@@ -131,7 +131,7 @@ void exchangeConservativeColumns(Mesh& mesh, int rank, int num_procs);
 void computeRHS(Mesh& mesh, double dt,
                 vector<MatrixXd> dU[4]);
 
-/// @brief Cockburn-Shu 矩限制器（适用于 DG P=1/2）
+/// @brief TVD限制器（适用于 DG P=1/2）
 ///
 /// 算法：
 ///   1. 对 x/y 方向线性模式 û_{1,0}, û_{0,1} 施加 minmod 条件

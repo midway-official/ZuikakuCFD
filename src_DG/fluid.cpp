@@ -62,7 +62,7 @@ static inline int midx(int px, int py) noexcept { return px*(DG_P+1) + py; }
 static inline int mpx (int m)          noexcept { return m / (DG_P+1); }
 static inline int mpy (int m)          noexcept { return m % (DG_P+1); }
 
-static inline double phi2(int m, double xi, double eta) noexcept {
+ double phi2(int m, double xi, double eta) noexcept {
     return legP(mpx(m), xi) * legP(mpy(m), eta);
 }
 
@@ -547,7 +547,7 @@ void computeRHS(Mesh& mesh, double dt,
         }
     };
 
-    const double inv2h = 2.0 / h;   // invMass 归一化因子的一部分
+    const double inv2h = 0.5 / h;   // invMass 归一化因子的一部分
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic,8)
@@ -676,80 +676,73 @@ void computeRHS(Mesh& mesh, double dt,
     }
 }
 
-// ============================================================================
-// applyLimiter — Cockburn-Shu 矩限制器（2D 版）
-//
-// 算法（对每个变量 c，每个内部单元 (i,j) 独立处理）：
-//
-//   1. 取 x 方向线性模式 m_x = midx(1,0)：
-//        û_{m_x}^lim = minmod(û_{m_x}, avg(j+1)-avg(j), avg(j)-avg(j-1))
-//
-//   2. 取 y 方向线性模式 m_y = midx(0,1)：
-//        û_{m_y}^lim = minmod(û_{m_y}, avg(i+1)-avg(i), avg(i)-avg(i-1))
-//
-//   3. 若任意模式被限制（û_lim ≠ û），则：
-//        - 用限制值替换线性模式
-//        - 将所有 px+py > 1 的高阶模式置零（退化为线性近似）
-//
-// 物理意义：
-//   Legendre L_1(ξ) 的系数 û_{1,0} 对应单元内部 x 方向斜率。
-//   相邻单元平均值差 avg_{j±1} - avg_j ≈ 2·û_{1,0}（光滑区自动满足，无需限制）。
-//   在激波附近该条件不成立，minmod 将其限制到安全范围。
-// ============================================================================
-void applyLimiter(Mesh& mesh)
-{
-    const int ny=mesh.ny, nx=mesh.nx;
+void applyLimiter(Mesh& mesh) {
+    const int ny = mesh.ny, nx = mesh.nx;
+    const double h  = mesh.da;
+    const double h2 = h * h;
 
-    // minmod(a, b, c)：三参数 minmod
-    auto mm3 = [](double a, double b, double c) -> double {
-        if (a>0 && b>0 && c>0) return std::min({a,b,c});
-        if (a<0 && b<0 && c<0) return std::max({a,b,c});
+    // TVB 参数 M：
+    //   M = 0  → 退化为普通 minmod（最平滑但会削峰）
+    //   M = 10~100 → 保持高阶精度，针对四象限黎曼问题建议 10.0~50.0
+    const double M    = 30.0;
+    const double Mh2  = M * h2;
+
+    // TVB-modified minmod：|a| <= M*h^2 时直接返回 a，不做限制
+    auto minmod_tvb = [&](double a, double b, double c) -> double {
+        if (std::abs(a) <= Mh2) return a;
+        if (a > 0 && b > 0 && c > 0) return std::min({a, b, c});
+        if (a < 0 && b < 0 && c < 0) return std::max({a, b, c});
         return 0.0;
     };
 
-    // x 方向线性模式索引：px=1, py=0
-    const int MX = midx(1, 0);
-    // y 方向线性模式索引：px=0, py=1
-    const int MY = midx(0, 1);
+    const int MX = midx(1, 0);   // x 方向线性模态索引
+    const int MY = midx(0, 1);   // y 方向线性模态索引
 
     for (int c = 0; c < 4; ++c) {
-        // 为避免限制过程中读到已被修改的邻格，先复制平均值
-        const MatrixXd avg = mesh.dof[c][0];  // 单元平均值快照
+        // 对邻居平均值做快照，避免同一轮循环中读到已修改的值
+        const MatrixXd avg = mesh.dof[c][0];
 
-        for (int i = 1; i < ny-1; ++i) {
-            for (int j = 1; j < nx-1; ++j) {
-                if (mesh.bctype(i,j) != 0) continue;
+        for (int i = 1; i < ny - 1; ++i) {
+            for (int j = 1; j < nx - 1; ++j) {
+                if (mesh.bctype(i, j) != 0) continue;
 
-                double a0  = avg(i,j);
-                double a0r = avg(i, j+1),  a0l = avg(i, j-1);
-                double a0d = avg(i+1, j),  a0u = avg(i-1, j);
+                const double a0  = avg(i,     j    );
+                const double a0r = avg(i,     j + 1);   // 右
+                const double a0l = avg(i,     j - 1);   // 左
+                // 矩阵约定：i 递增 = 物理 y 递减
+                const double a0u = avg(i - 1, j    );   // 上（物理 +y，i-1）
+                const double a0d = avg(i + 1, j    );   // 下（物理 -y，i+1）
 
-                // x 方向限制
-                double ux    = mesh.dof[c][MX](i,j);
-                double ux_lim = mm3(ux, a0r-a0, a0-a0l);
+                double ux = mesh.dof[c][MX](i, j);
+                double uy = mesh.dof[c][MY](i, j);
 
-                // y 方向限制
-                double uy    = mesh.dof[c][MY](i,j);
-                double uy_lim = mm3(uy, a0d-a0, a0-a0u);
+                // x 方向：前向差分 = a0r - a0，后向差分 = a0 - a0l
+                double ux_lim = minmod_tvb(ux,  a0r - a0,  a0 - a0l);
 
-                bool limited = (ux_lim != ux) || (uy_lim != uy);
-                if (!limited) continue;
+                // y 方向：前向差分 = a0u - a0，后向差分 = a0 - a0d
+                
+                double uy_lim = minmod_tvb(uy, a0d-a0, a0-a0u);
 
-                // 写入限制后的线性模式
-                mesh.dof[c][MX](i,j) = ux_lim;
-                mesh.dof[c][MY](i,j) = uy_lim;
+                const bool is_limited =
+                    (std::abs(ux_lim - ux) > 1e-14) ||
+                    (std::abs(uy_lim - uy) > 1e-14);
 
-                // 将所有 px+py > 1 的高阶模式清零
-                // （包括交叉项 midx(1,1) 和 px>1 或 py>1 的模式）
-                for (int m = 0; m < DG_NM; ++m) {
-                    if (mpx(m) + mpy(m) > 1)
-                        mesh.dof[c][m](i,j) = 0.0;
+                if (is_limited) {
+                    mesh.dof[c][MX](i, j) = ux_lim;
+                    mesh.dof[c][MY](i, j) = uy_lim;
+
+                    // 线性分量被限制 → 单元可能处于间断区
+                    // 将所有高于一阶的模态清零（P^k → P^1）
+                    for (int m = 0; m < DG_NM; ++m) {
+                        if (mpx(m) + mpy(m) > 1) {
+                            mesh.dof[c][m](i, j) = 0.0;
+                        }
+                    }
                 }
             }
         }
     }
 }
-
 // ============================================================================
 // updateMesh — SSP-RK3 时间推进
 //
