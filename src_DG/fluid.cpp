@@ -87,15 +87,28 @@ static inline double invMass(int m) noexcept {
 // ============================================================================
 static constexpr int NQ = DG_P + 1;   // = 3 for P=2
 
-static const double GL_PT[2] = {
-    -0.5773502691896257,
-     0.5773502691896257
+struct GaussQuadrature {
+    // 存储 2阶, 3阶, 4阶 的节点
+    static constexpr double POINTS[5][4] = {
+        {}, // 0阶 (不使用)
+        {}, // 1阶 (不使用)
+        {-0.5773502691896257, 0.5773502691896257, 0, 0}, // NQ=2
+        {-0.7745966692414834, 0.0, 0.7745966692414834, 0}, // NQ=3
+        {-0.8611363115940526, -0.3399810435848563, 0.3399810435848563, 0.8611363115940526} // NQ=4
+    };
+
+    static constexpr double WEIGHTS[5][4] = {
+        {}, 
+        {},
+        {1.0, 1.0, 0, 0}, // NQ=2
+        {0.5555555555555556, 0.8888888888888888, 0.5555555555555556, 0}, // NQ=3
+        {0.3478548451374538, 0.6521451548625461, 0.6521451548625461, 0.3478548451374538} // NQ=4
+    };
 };
 
-static const double GL_WT[2] = {
-    1.0,
-    1.0
-};
+// 使用示例：
+static const double* GL_PT = GaussQuadrature::POINTS[NQ];
+static const double* GL_WT = GaussQuadrature::WEIGHTS[NQ];
 // ============================================================================
 // DG 辅助：Euler 通量函数
 //
@@ -713,7 +726,7 @@ void applyLimiter(Mesh& mesh)
 {
     const int ny = mesh.ny;
     const int nx = mesh.nx;
-
+    const double alpha = 0.8; // Persson 指标阈值，需根据问题调整
 
 
     // =============================
@@ -733,7 +746,39 @@ void applyLimiter(Mesh& mesh)
          0.0,
          0.7745966692
     };
+    // 遍历内部单元
+    for (int i = 3; i < ny-3; ++i) {
+        for (int j = 3; j < nx-3; ++j) {
 
+            if (mesh.bctype(i,j) != 0) continue; // 仅处理内部流体
+
+            for (int c = 0; c < 4; ++c) {
+
+                // 模式 0 平均值
+                double u0 = mesh.dof[c][0](i,j);
+
+                // 计算高阶模式能量
+                double Ehigh = 0.0;
+                double Etot   = u0*u0; // 包含平均值平方
+
+                for (int m = 1; m < DG_NM; ++m) {
+                    double val = mesh.dof[c][m](i,j);
+                    Etot   += val*val;
+                    Ehigh  += val*val;
+                }
+
+                // Persson 指标 S = E_high / E_total
+                double S = Ehigh / (Etot + 1e-16);
+
+                if (S > alpha) {
+                    // 光滑性不够 -> 降阶
+                    for (int m = 1; m < DG_NM; ++m) {
+                        mesh.dof[c][DG_NM-1](i,j) = 0.0;
+                    }
+                }
+            }
+        }
+    }
     for(int i=1;i<ny-1;i++)
     for(int j=1;j<nx-1;j++)
     {

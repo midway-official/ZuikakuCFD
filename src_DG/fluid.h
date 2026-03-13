@@ -8,6 +8,9 @@
 #include <fstream>
 #include <cmath>
 #include <vector>
+#include <array>
+#include <stdexcept>
+#include <cassert>
 #include <filesystem>
 #include <mpi.h>
 #include <omp.h>
@@ -29,7 +32,10 @@ namespace fs = std::filesystem;
 // DG_P=2 → 9 个模式（三阶精度，默认）
 // DG_P=3 → 16 个模式（四阶精度）
 // ============================================================================
-static constexpr int DG_P  = 1;
+#ifndef DG_P_VAL
+    #define DG_P_VAL 3 // 默认值
+#endif
+static constexpr int DG_P  =DG_P_VAL;
 static constexpr int DG_NM = (DG_P + 1) * (DG_P + 1);
 
 // ============================================================================
