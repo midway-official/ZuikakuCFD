@@ -76,7 +76,9 @@ void printPerfReport(int rank, int num_procs,
     std::cout << "  最大: " << max_t << " ms  最小: " << min_t
               << " ms  均值: " << avg_t << " ms\n";
     std::cout << "  不均衡系数: " << std::setprecision(3) << imbalance
-                                 << "\n";
+              << (imbalance < 1.05 ? "  ✓ 优秀"
+                : imbalance < 1.20 ? "  ○ 良好"
+                                   : "  ✗ 需优化") << "\n";
     std::cout << "  并行效率:   " << std::setprecision(1)
               << 100.0 / imbalance << "%\n";
     std::cout << "════════════════════════════════════════\n";
@@ -141,7 +143,7 @@ int main(int argc, char* argv[])
     // ── 性能计数器（仅三项）──
     double compute_ms = 0.0;
     double io_ms      = 0.0;
-    const int print_interval  = std::max(1, timesteps / 1000);
+    const int print_interval  = std::max(1, timesteps / 10);
     const int output_interval = 100;
 
     for(int step = 0; step < timesteps; ++step) {
