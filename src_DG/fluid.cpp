@@ -87,17 +87,15 @@ static inline double invMass(int m) noexcept {
 // ============================================================================
 static constexpr int NQ = DG_P + 1;   // = 3 for P=2
 
-static const double GL_PT[3] = {
-    -0.7745966692414834,   // -√(3/5)
-     0.0,
-     0.7745966692414834    // +√(3/5)
-};
-static const double GL_WT[3] = {
-     0.5555555555555556,   // 5/9
-     0.8888888888888888,   // 8/9
-     0.5555555555555556    // 5/9
+static const double GL_PT[2] = {
+    -0.5773502691896257,
+     0.5773502691896257
 };
 
+static const double GL_WT[2] = {
+    1.0,
+    1.0
+};
 // ============================================================================
 // DG 辅助：Euler 通量函数
 //
@@ -106,7 +104,7 @@ static const double GL_WT[3] = {
 // y 通量 G = [ρv, ρuv, ρv²+p, (E+p)v]
 // ============================================================================
 static inline void eulerFluxX(const double U[4], double F[4], double gam) noexcept {
-    constexpr double eps = 1e-12;
+    constexpr double eps = 1e-3;
     double rho = std::max(U[0], eps);
     double u   = U[1] / rho,  v = U[2] / rho;
     double p   = std::max((gam-1.0)*(U[3] - 0.5*rho*(u*u+v*v)), eps);
@@ -117,7 +115,7 @@ static inline void eulerFluxX(const double U[4], double F[4], double gam) noexce
 }
 
 static inline void eulerFluxY(const double U[4], double G[4], double gam) noexcept {
-    constexpr double eps = 1e-12;
+    constexpr double eps = 1e-3;
     double rho = std::max(U[0], eps);
     double u   = U[1] / rho,  v = U[2] / rho;
     double p   = std::max((gam-1.0)*(U[3] - 0.5*rho*(u*u+v*v)), eps);
@@ -438,7 +436,7 @@ void hllcFlux(
     double gamma,
     double& F0,double& F1,double& F2,double& F3)
 {
-    const double eps=1e-12;
+    const double eps=1e-20;
     double rhoL=std::max(UL0,eps), uL=UL1/rhoL, vL=UL2/rhoL, EL=UL3/rhoL;
     double pL=std::max((gamma-1.0)*(UL3-0.5*rhoL*(uL*uL+vL*vL)),eps);
     double aL=sqrt(gamma*pL/rhoL);
@@ -463,7 +461,7 @@ void hllcFlux(
 
     double num=pR-pL+rhoL*uL*(SL-uL)-rhoR*uR*(SR-uR);
     double den2=rhoL*(SL-uL)-rhoR*(SR-uR);
-    if (fabs(den2)<1e-12) den2=(den2>=0?1e-12:-1e-12);
+    if (fabs(den2)<1e-20) den2=(den2>=0?1e-20:-1e-20);
     double Sstar=num/den2;
 
     auto star_state=[&](double rho,double u,double v,double E,
@@ -542,14 +540,6 @@ static void fillDGGhostCells(Mesh& mesh)
 //   下界面 (η=+1)：S_m += ∑_q w_q · G*(U_L(ξ_q,+1), U_R_down(ξ_q,-1)) · φ_m(ξ_q,+1)
 //   上界面 (η=-1)：S_m -= ∑_q w_q · G*(U_L_up(ξ_q,+1), U_R(ξ_q,-1)) · φ_m(ξ_q,-1)
 //
-// ── 质量矩阵归一化 ─────────────────────────────────────────────────────────
-//
-//   dû_m/dt = (V_m - S_m) · invMass(m) · 2/h
-//
-//   推导：dû_m/dt = RHS_phys / M_mm
-//         RHS_phys = (h/2) · (V_m - S_m)  [将 (h/2) 从物理积分中提出]
-//         M_mm     = (h/2)² / invMass(m)
-//         → dû_m/dt = (V_m - S_m) · invMass(m) · 2/h  ✓
 // ============================================================================
 void computeRHS(Mesh& mesh, double dt,
                 vector<MatrixXd> dU[4])
@@ -580,12 +570,9 @@ void computeRHS(Mesh& mesh, double dt,
 
     const double inv2h = 0.5 / h;   // invMass 归一化因子的一部分
 
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic,8)
-#endif
-    for (int i = 1; i < ny-1; ++i)
+    for (int i = 3; i < ny-3; ++i)
     {
-        for (int j = 1; j < nx-1; ++j)
+        for (int j = 3; j < nx-3; ++j)
         {
             if (mesh.bctype(i,j) != 0) continue;
 
@@ -722,114 +709,238 @@ inline double basis(int m, double xi, double eta)
 
     return P(px,xi) * P(py,eta);
 }
-void applyLimiter(Mesh& mesh) {
-    const int ny = mesh.ny, nx = mesh.nx;
-    const double h  = mesh.da;
-    const double h2 = h * h;
+void applyLimiter(Mesh& mesh)
+{
+    const int ny = mesh.ny;
+    const int nx = mesh.nx;
 
-    // TVB 参数 M：
-    //   M = 0  → 退化为普通 minmod（最平滑但会削峰）
-    //   M = 10~100 → 保持高阶精度，针对四象限黎曼问题建议 10.0~50.0
-    const double M    = 30.0;
-    const double Mh2  = M * h2;
+    fillDGGhostCells(mesh);
 
-    // TVB-modified minmod：|a| <= M*h^2 时直接返回 a，不做限制
-    auto minmod_tvb = [&](double a, double b, double c) -> double {
-        if (std::abs(a) <= Mh2) return a;
-        if (a > 0 && b > 0 && c > 0) return std::min({a, b, c});
-        if (a < 0 && b < 0 && c < 0) return std::max({a, b, c});
+    const double persson_eps = 1e-2;
+    const double scale_floor = 0.1;
+
+    const int MX = midx(1,0);
+    const int MY = midx(0,1);
+
+    // =============================
+    // minmod
+    // =============================
+
+    auto minmod = [](double a,double b,double c)
+    {
+        if(a>0 && b>0 && c>0)
+            return std::min({a,b,c});
+
+        if(a<0 && b<0 && c<0)
+            return std::max({a,b,c});
+
         return 0.0;
     };
 
-    const int MX = midx(1, 0);   // x 方向线性模态索引
-    const int MY = midx(0, 1);   // y 方向线性模态索引
+    // =============================
+    // Troubled cell detection
+    // =============================
 
-    for (int c = 0; c < 4; ++c) {
-        // 对邻居平均值做快照，避免同一轮循环中读到已修改的值
-        const MatrixXd avg = mesh.dof[c][0];
-
-        for (int i = 1; i < ny - 1; ++i) {
-            for (int j = 1; j < nx - 1; ++j) {
-                if (mesh.bctype(i, j) != 0) continue;
-
-                const double a0  = avg(i,     j    );
-                const double a0r = avg(i,     j + 1);   // 右
-                const double a0l = avg(i,     j - 1);   // 左
-                // 矩阵约定：i 递增 = 物理 y 递减
-                const double a0u = avg(i - 1, j    );   // 上（物理 +y，i-1）
-                const double a0d = avg(i + 1, j    );   // 下（物理 -y，i+1）
-
-                double ux = mesh.dof[c][MX](i, j);
-                double uy = mesh.dof[c][MY](i, j);
-
-                // x 方向：前向差分 = a0r - a0，后向差分 = a0 - a0l
-                double ux_lim = minmod_tvb(ux,  a0r - a0,  a0 - a0l);
-
-                // y 方向：前向差分 = a0u - a0，后向差分 = a0 - a0d
-                
-                double uy_lim = minmod_tvb(uy, a0d-a0, a0-a0u);
-
-                const bool is_limited =
-                    (std::abs(ux_lim - ux) > 1e-14) ||
-                    (std::abs(uy_lim - uy) > 1e-14);
-
-                if (is_limited) {
-                    mesh.dof[c][MX](i, j) = ux_lim;
-                    mesh.dof[c][MY](i, j) = uy_lim;
-
-                    // 线性分量被限制 → 单元可能处于间断区
-                    // 将所有高于一阶的模态清零（P^k → P^1）
-                    for (int m = 0; m < DG_NM; ++m) {
-                        if (mpx(m) + mpy(m) > 1) {
-                            mesh.dof[c][m](i, j) = 0.0;
-                        }
-                    }
-                }
-            }
-        }
-    }
-for (int i=1;i<ny-1;i++)
-for (int j=1;j<nx-1;j++)
-{
-    bool bad = false;
-
-    // 检查 4 个角点
-    const double xi[4]  = {-1,1,-1,1};
-    const double eta[4] = {-1,-1,1,1};
-
-    for(int q=0;q<4;q++)
+    for(int i=2;i<ny-2;i++)
+    for(int j=2;j<nx-2;j++)
     {
-        double rho=0,mx=0,my=0,E=0;
+        if(mesh.bctype(i,j)!=0) continue;
+
+        double high=0;
+        double total=0;
 
         for(int m=0;m<DG_NM;m++)
         {
-            double phi = basis(m,xi[q],eta[q]);
+            double a = mesh.dof[0][m](i,j);
 
-            rho += mesh.dof[0][m](i,j)*phi;
-            mx  += mesh.dof[1][m](i,j)*phi;
-            my  += mesh.dof[2][m](i,j)*phi;
-            E   += mesh.dof[3][m](i,j)*phi;
+            total += a*a;
+
+            if(mpx(m)+mpy(m)>=2)
+                high += a*a;
         }
 
-        double u = mx/rho;
-        double v = my/rho;
+        double a0 = mesh.dof[0][0](i,j);
 
-        double p=(mesh.gamma-1)*(E-0.5*rho*(u*u+v*v));
+        double sensor =
+            high/(a0*a0 + total + 1e-16);
 
-        if(rho<=1e-8 || p<=1e-8)
+        if(sensor < persson_eps)
+            continue;
+
+        // =====================================
+        // shock cell → 3×3 block 降阶 (P2→P1)
+        // =====================================
+
+        for(int ii=i-1; ii<=i+1; ii++)
+        for(int jj=j-1; jj<=j+1; jj++)
         {
-            bad=true;
-            break;
+            for(int c=0;c<4;c++)
+            for(int m=0;m<DG_NM;m++)
+            {
+                if(mpx(m)+mpy(m)>=2)
+                    mesh.dof[c][m](ii,jj)=0.0;
+            }
+        }
+
+        // =============================
+        // slope limiter
+        // =============================
+
+        for(int c=0;c<4;c++)
+        {
+            const MatrixXd& avg = mesh.dof[c][0];
+
+            double a0  = avg(i,j);
+            double a0r = avg(i,j+1);
+            double a0l = avg(i,j-1);
+            double a0u = avg(i-1,j);
+            double a0d = avg(i+1,j);
+
+            double ux = mesh.dof[c][MX](i,j);
+            double uy = mesh.dof[c][MY](i,j);
+
+            double ux_lim =
+                minmod(
+                    ux,
+                    (a0r-a0),
+                    (a0-a0l)
+                );
+
+            double uy_lim =
+                minmod(
+                    uy,
+                    (a0d-a0),
+                    (a0-a0u)
+                );
+
+            double scale_x =
+                fabs(ux)>1e-14 ?
+                fabs(ux_lim)/fabs(ux) : 1.0;
+
+            double scale_y =
+                fabs(uy)>1e-14 ?
+                fabs(uy_lim)/fabs(uy) : 1.0;
+
+            mesh.dof[c][MX](i,j)=ux_lim;
+            mesh.dof[c][MY](i,j)=uy_lim;
+
+            double scale =
+                std::max(scale_floor,
+                std::min(scale_x,scale_y));
+
+            for(int m=0;m<DG_NM;m++)
+            {
+                if(mpx(m)+mpy(m)>1)
+                    mesh.dof[c][m](i,j)*=scale;
+            }
         }
     }
 
-    if(bad)
+    // =============================
+    // Zhang–Shu positivity limiter
+    // =============================
+
+    const double xi[3] =
     {
-        for(int c=0;c<4;c++)
-        for(int m=1;m<DG_NM;m++)
-            mesh.dof[c][m](i,j)=0.0;
+        -0.7745966692,
+         0.0,
+         0.7745966692
+    };
+
+    const double eta[3] =
+    {
+        -0.7745966692,
+         0.0,
+         0.7745966692
+    };
+
+    for(int i=1;i<ny-1;i++)
+    for(int j=1;j<nx-1;j++)
+    {
+        double rho_avg = mesh.dof[0][0](i,j);
+
+        double theta = 1.0;
+
+        // ========= 3×3 Gauss density check =========
+
+        for(int a=0;a<3;a++)
+        for(int b=0;b<3;b++)
+        {
+            double rho=0;
+
+            for(int m=0;m<DG_NM;m++)
+            {
+                double phi = basis(m,xi[a],eta[b]);
+                rho += mesh.dof[0][m](i,j)*phi;
+            }
+
+            if(rho < 1e-12)
+            {
+                double t =
+                    (rho_avg-1e-12)/
+                    (rho_avg-rho+1e-14);
+
+                theta = std::min(theta,t);
+            }
+        }
+
+        if(theta < 1.0)
+        {
+            for(int m=1;m<DG_NM;m++)
+            {
+                mesh.dof[0][m](i,j)*=theta;
+                mesh.dof[1][m](i,j)*=theta;
+                mesh.dof[2][m](i,j)*=theta;
+                mesh.dof[3][m](i,j)*=theta;
+            }
+        }
+
+        // ========= pressure check =========
+
+        bool bad=false;
+
+        for(int a=0;a<3;a++)
+        for(int b=0;b<3;b++)
+        {
+            double rho=0,mx=0,my=0,E=0;
+
+            for(int m=0;m<DG_NM;m++)
+            {
+                double phi=basis(m,xi[a],eta[b]);
+
+                rho+=mesh.dof[0][m](i,j)*phi;
+                mx +=mesh.dof[1][m](i,j)*phi;
+                my +=mesh.dof[2][m](i,j)*phi;
+                E  +=mesh.dof[3][m](i,j)*phi;
+            }
+
+            if(rho<=0)
+            {
+                bad=true;
+                break;
+            }
+
+            double u = mx/rho;
+            double v = my/rho;
+
+            double p =
+                (mesh.gamma-1)*
+                (E-0.5*rho*(u*u+v*v));
+
+            if(p<=1e-12)
+            {
+                bad=true;
+                break;
+            }
+        }
+
+        if(bad)
+        {
+            for(int c=0;c<4;c++)
+            for(int m=1;m<DG_NM;m++)
+                mesh.dof[c][m](i,j)=0.0;
+        }
     }
-}
 }
 // ============================================================================
 // updateMesh — SSP-RK3 时间推进
@@ -853,19 +964,18 @@ void updateMesh(Mesh& mesh, double dt, int rank, int num_procs)
         for (int m = 0; m < DG_NM; ++m)
             dof_n[c][m] = mesh.dof[c][m];
     }
-    exchangeConservativeColumns(mesh, rank, num_procs);
+
     // RHS 缓冲区
     vector<MatrixXd> dU[4];
     for (int c = 0; c < 4; ++c)
         dU[c].resize(DG_NM, MatrixXd::Zero(ny, nx));
-    exchangeConservativeColumns(mesh, rank, num_procs);
     // ── Stage 1：U* = U^n + dt·L(U^n) ──────────────────────────────────
     computeRHS(mesh, dt, dU);
     exchangeConservativeColumns(mesh, rank, num_procs);
     for (int c = 0; c < 4; ++c)
         for (int m = 0; m < DG_NM; ++m)
             mesh.dof[c][m] = dof_n[c][m] + dt * dU[c][m];
-    exchangeConservativeColumns(mesh, rank, num_procs);        
+      
     applyLimiter(mesh);
     exchangeConservativeColumns(mesh, rank, num_procs);
     mesh.syncCellAverages();
@@ -876,8 +986,7 @@ void updateMesh(Mesh& mesh, double dt, int rank, int num_procs)
     exchangeConservativeColumns(mesh, rank, num_procs);
     for (int c = 0; c < 4; ++c)
         for (int m = 0; m < DG_NM; ++m)
-            mesh.dof[c][m] = 0.75*dof_n[c][m] + 0.25*(mesh.dof[c][m] + dt*dU[c][m]);
-    exchangeConservativeColumns(mesh, rank, num_procs);        
+            mesh.dof[c][m] = 0.75*dof_n[c][m] + 0.25*(mesh.dof[c][m] + dt*dU[c][m]);    
     applyLimiter(mesh);
     exchangeConservativeColumns(mesh, rank, num_procs);
     mesh.syncCellAverages();
@@ -885,7 +994,6 @@ void updateMesh(Mesh& mesh, double dt, int rank, int num_procs)
 
     // ── Stage 3：U^{n+1} = 1/3·U^n + 2/3·(U** + dt·L(U**)) ─────────────
     computeRHS(mesh, dt, dU);
-    exchangeConservativeColumns(mesh, rank, num_procs);
     for (int c = 0; c < 4; ++c)
         for (int m = 0; m < DG_NM; ++m)
             mesh.dof[c][m] = (1.0/3.0)*dof_n[c][m] + (2.0/3.0)*(mesh.dof[c][m] + dt*dU[c][m]);

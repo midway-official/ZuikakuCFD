@@ -143,7 +143,7 @@ int main(int argc, char* argv[])
     // ── 性能计数器（仅三项）──
     double compute_ms = 0.0;
     double io_ms      = 0.0;
-    const int print_interval  = std::max(1, timesteps / 10);
+    const int print_interval  = std::max(1, timesteps / 1000);
     const int output_interval = 100;
 
     for(int step = 0; step < timesteps; ++step) {
