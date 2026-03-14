@@ -22,43 +22,66 @@ inline double dgSafeDt(double lambda_max, double h) {
     return dgCFLLimit() * h / lambda_max;
 }
 
-// =============================================================================
-// computeMaxSpeedDG: 对每个 DG 单元的角点做多项式重构求最大波速
-// =============================================================================
-static double computeMaxSpeedDG(const Mesh& mesh)
+// ==================== 优化后的 DG 最大波速 ====================
+static double computeMaxSpeedDG_omp(const Mesh& mesh)
 {
     const double gam = mesh.gamma;
     constexpr double eps = 1e-12;
     const double XI [4] = {-1.0, +1.0, -1.0, +1.0};
     const double ETA[4] = {-1.0, -1.0, +1.0, +1.0};
+
+    // 预计算 phi2(m, xi, eta)  -> DG_NM x 4
+    static double PHI[DG_NM][4];
+    for (int m = 0; m < DG_NM; ++m)
+        for (int k = 0; k < 4; ++k)
+            PHI[m][k] = phi2(m, XI[k], ETA[k]);
+
     double umax = 0.0;
 
+    #pragma omp parallel for collapse(2) reduction(max:umax)
     for (int i = 0; i < mesh.ny; ++i) {
         for (int j = 0; j < mesh.nx; ++j) {
-            if (mesh.bctype(i, j) != 0) continue;
+            if (mesh.bctype(i,j) != 0) continue;
             for (int k = 0; k < 4; ++k) {
-                double xi = XI[k], eta = ETA[k];
-                double U[4] = {0.0, 0.0, 0.0, 0.0};
+                double U[4] = {0.0,0.0,0.0,0.0};
                 for (int m = 0; m < DG_NM; ++m) {
-                    double b = phi2(m, xi, eta);
-                    U[0] += mesh.dof[0][m](i, j) * b;
-                    U[1] += mesh.dof[1][m](i, j) * b;
-                    U[2] += mesh.dof[2][m](i, j) * b;
-                    U[3] += mesh.dof[3][m](i, j) * b;
+                    double b = PHI[m][k];
+                    U[0] += mesh.dof[0][m](i,j) * b;
+                    U[1] += mesh.dof[1][m](i,j) * b;
+                    U[2] += mesh.dof[2][m](i,j) * b;
+                    U[3] += mesh.dof[3][m](i,j) * b;
                 }
                 double rho = std::max(U[0], eps);
-                double u   = U[1] / rho;
-                double v   = U[2] / rho;
-                double p   = std::max((gam - 1.0) * (U[3] - 0.5 * rho * (u*u + v*v)), eps);
-                double a   = std::sqrt(gam * p / rho);
-                double spd = std::sqrt(u*u + v*v) + a;
-                umax = std::max(umax, spd);
+                double u   = U[1]/rho;
+                double v   = U[2]/rho;
+                double p   = std::max((gam-1.0)*(U[3]-0.5*rho*(u*u+v*v)), eps);
+                double a   = std::sqrt(gam*p/rho);
+                umax = std::max(umax, std::sqrt(u*u+v*v) + a);
             }
         }
     }
     return umax;
 }
 
+// ==================== 自适应 dt 更新 ====================
+inline double adaptiveDt(double& dt, double h,
+                         double local_umax,
+                         bool auto_dt, bool time_mode,
+                         double physical_time=0.0, double t_end=0.0)
+{
+    double global_umax = 0.0;
+    const double dt_min = 1e-6;  // 最小时间步限制
+    MPI_Allreduce(&local_umax, &global_umax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    double dt_safe = dgSafeDt(global_umax, h);
+
+    if (auto_dt || time_mode) {
+        dt = dt_safe;
+        if (time_mode && physical_time + dt > t_end)
+            dt = t_end - physical_time; // 防止 overshoot
+    }
+    dt = std::max(dt, dt_min);
+    return dt;
+}
 // ==================== 性能报告 ====================
 void printPerfReport(int rank, int num_procs,
                      double wall_ms,
@@ -180,7 +203,7 @@ int main(int argc, char* argv[])
     Mesh local_mesh = sub_meshes[rank];
 
     // ── CFL 检查 & dt 确定 ─────────────────────────────────
-    double local_umax  = computeMaxSpeedDG(local_mesh);
+    double local_umax  = computeMaxSpeedDG_omp(local_mesh);
     double global_umax = 0.0;
     MPI_Allreduce(&local_umax, &global_umax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
 
@@ -239,35 +262,31 @@ int main(int argc, char* argv[])
     // ── 主时间步循环 ─────────────────────────────────────────
     double compute_ms = 0.0;
     double io_ms      = 0.0;
-    const int print_interval       = std::max(1, (time_mode ? 100 : timesteps / 1000));
+    const int print_interval       = std::max(1, (time_mode ? 10 : timesteps / 10000));
     const int output_interval      = 100;
-    const int cfl_recheck_interval = 50;
+    const int cfl_recheck_interval = 10;
 
     int step = 0;
     while ((!time_mode && step < timesteps) || (time_mode && physical_time < t_end)) {
 
         // 重新计算最大波速并调整 dt
-        if (step > 0 && step % cfl_recheck_interval == 0) {
-            double lmax_local  = computeMaxSpeedDG(local_mesh);
-            double lmax_global = 0.0;
-            MPI_Allreduce(&lmax_local, &lmax_global, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    if (step > 0 && step % cfl_recheck_interval == 0) {
+    double lmax_local  = computeMaxSpeedDG_omp(local_mesh);
 
-            if (auto_dt || time_mode) {
-                dt = dgSafeDt(lmax_global, h);
-                if (time_mode && physical_time + dt > t_end)
-                    dt = t_end - physical_time; // 防止 overshoot
-            } else {
-                double cfl_now = lmax_global * dt / h;
-                if (rank == 0 && cfl_now > cfl_limit) {
-                    std::cerr << std::fixed << std::setprecision(6)
-                              << "[警告] 第 " << step << " 步：CFL = " << cfl_now
-                              << " 超过稳定上限 " << cfl_limit
-                              << "  (λ_max=" << lmax_global
-                              << ", dt=" << dt << ")\n"
-                              << "  固定dt模式无法自动调整，建议减小dt或改用 'auto' 模式\n";
-                }
-            }
+    if (auto_dt || time_mode) {
+        dt = adaptiveDt(dt, h, lmax_local, auto_dt, time_mode, physical_time, t_end);
+    } else {
+        double cfl_now = lmax_local * dt / h;
+        if (rank == 0 && cfl_now > cfl_limit) {
+            std::cerr << std::fixed << std::setprecision(6)
+                      << "[警告] 第 " << step << " 步：CFL = " << cfl_now
+                      << " 超过稳定上限 " << cfl_limit
+                      << "  (λ_max=" << lmax_local
+                      << ", dt=" << dt << ")\n"
+                      << "  固定dt模式无法自动调整，建议减小dt或改用 'auto' 模式\n";
         }
+    }
+    }
 
         // 计算
         auto t0 = now();

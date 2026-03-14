@@ -722,29 +722,32 @@ inline double basis(int m, double xi, double eta)
 
     return P(px,xi) * P(py,eta);
 }
+
 void applyLimiter(Mesh& mesh)
 {
     const int ny = mesh.ny;
     const int nx = mesh.nx;
-    const double alpha = 0.8; // Persson 指标阈值，需根据问题调整
+    const double alpha = 0.9; // Persson 指标阈值，需根据问题调整
 
 
     // =============================
     // Zhang–Shu positivity limiter
     // =============================
 
-    const double xi[3] =
-    {
-        -0.7745966692,
-         0.0,
-         0.7745966692
+      const double xi[4] =
+     {
+    -0.8611363115940526,
+    -0.3399810435848563,
+     0.3399810435848563,
+     0.8611363115940526
     };
 
-    const double eta[3] =
+      const double eta[4] =
     {
-        -0.7745966692,
-         0.0,
-         0.7745966692
+    -0.8611363115940526,
+    -0.3399810435848563,
+     0.3399810435848563,
+     0.8611363115940526
     };
     // 遍历内部单元
     for (int i = 3; i < ny-3; ++i) {
@@ -771,102 +774,122 @@ void applyLimiter(Mesh& mesh)
                 double S = Ehigh / (Etot + 1e-16);
 
                 if (S > alpha) {
-                    // 光滑性不够 -> 降阶
-                    for (int m = 1; m < DG_NM; ++m) {
-                        mesh.dof[c][DG_NM-1](i,j) = 0.0;
-                    }
+                    for(int px=0;px<=DG_P;px++)
+                    for(int py=0;py<=DG_P;py++)
+                       {
+                       if(px==DG_P || py==DG_P)
+                       {
+                        int m = px*(DG_P+1)+py;
+                        mesh.dof[c][m](i,j)=0.0;
+                       }
+}
                 }
             }
         }
     }
-    for(int i=1;i<ny-1;i++)
-    for(int j=1;j<nx-1;j++)
+    for(int i=3;i<ny-3;i++)
+    for(int j=3;j<nx-3;j++)
+     {
+    double rho_avg = mesh.dof[0][0](i,j);
+
+    double theta_rho = 1.0;
+
+    // ===============================
+    // Step 1: density positivity
+    // ===============================
+
+    for(int a=0;a<4;a++)
+    for(int b=0;b<4;b++)
     {
-        double rho_avg = mesh.dof[0][0](i,j);
+        double rho = 0.0;
 
-        double theta = 1.0;
-
-        // ========= 3×3 Gauss density check =========
-
-        for(int a=0;a<3;a++)
-        for(int b=0;b<3;b++)
+        for(int m=0;m<DG_NM;m++)
         {
-            double rho=0;
-
-            for(int m=0;m<DG_NM;m++)
-            {
-                double phi = basis(m,xi[a],eta[b]);
-                rho += mesh.dof[0][m](i,j)*phi;
-            }
-
-            if(rho < 1e-12)
-            {
-                double t =
-                    (rho_avg-1e-12)/
-                    (rho_avg-rho+1e-14);
-
-                theta = std::min(theta,t);
-            }
+            double phi = basis(m,xi[a],eta[b]);
+            rho += mesh.dof[0][m](i,j)*phi;
         }
 
-        if(theta < 1.0)
+        if(rho < 1e-12)
         {
-            for(int m=1;m<DG_NM;m++)
-            {
-                mesh.dof[0][m](i,j)*=theta;
-                mesh.dof[1][m](i,j)*=theta;
-                mesh.dof[2][m](i,j)*=theta;
-                mesh.dof[3][m](i,j)*=theta;
-            }
+            double t =
+                (rho_avg-1e-12)/
+                (rho_avg-rho+1e-14);
+
+            theta_rho = std::min(theta_rho,t);
+        }
+    }
+
+    if(theta_rho < 1.0)
+    {
+        for(int m=1;m<DG_NM;m++)
+        {
+            mesh.dof[0][m](i,j)*=theta_rho;
+            mesh.dof[1][m](i,j)*=theta_rho;
+            mesh.dof[2][m](i,j)*=theta_rho;
+            mesh.dof[3][m](i,j)*=theta_rho;
+        }
+    }
+
+    // ===============================
+    // Step 2: pressure positivity
+    // ===============================
+
+    double theta_p = 1.0;
+
+    for(int a=0;a<4;a++)
+    for(int b=0;b<4;b++)
+    {
+        double rho=0,mx=0,my=0,E=0;
+
+        for(int m=0;m<DG_NM;m++)
+        {
+            double phi=basis(m,xi[a],eta[b]);
+
+            rho+=mesh.dof[0][m](i,j)*phi;
+            mx +=mesh.dof[1][m](i,j)*phi;
+            my +=mesh.dof[2][m](i,j)*phi;
+            E  +=mesh.dof[3][m](i,j)*phi;
         }
 
-        // ========= pressure check =========
+        if(rho <= 1e-12) continue;
 
-        bool bad=false;
+        double u = mx/rho;
+        double v = my/rho;
 
-        for(int a=0;a<3;a++)
-        for(int b=0;b<3;b++)
+        double p =
+            (mesh.gamma-1)*
+            (E-0.5*rho*(u*u+v*v));
+
+        if(p < 1e-12)
         {
-            double rho=0,mx=0,my=0,E=0;
-
-            for(int m=0;m<DG_NM;m++)
-            {
-                double phi=basis(m,xi[a],eta[b]);
-
-                rho+=mesh.dof[0][m](i,j)*phi;
-                mx +=mesh.dof[1][m](i,j)*phi;
-                my +=mesh.dof[2][m](i,j)*phi;
-                E  +=mesh.dof[3][m](i,j)*phi;
-            }
-
-            if(rho<=0)
-            {
-                bad=true;
-                break;
-            }
-
-            double u = mx/rho;
-            double v = my/rho;
-
-            double p =
+            double p_avg =
                 (mesh.gamma-1)*
-                (E-0.5*rho*(u*u+v*v));
+                (mesh.dof[3][0](i,j)-
+                 0.5*(mesh.dof[1][0](i,j)*mesh.dof[1][0](i,j)
+                     +mesh.dof[2][0](i,j)*mesh.dof[2][0](i,j))
+                 /mesh.dof[0][0](i,j));
 
-            if(p<=1e-12)
-            {
-                bad=true;
-                break;
-            }
+            double t =
+                (p_avg-1e-12)/
+                (p_avg-p+1e-14);
+
+            theta_p = std::min(theta_p,t);
         }
+    }
 
-        if(bad)
+    if(theta_p < 1.0)
+    {
+        for(int m=1;m<DG_NM;m++)
         {
-            for(int c=0;c<4;c++)
-            for(int m=1;m<DG_NM;m++)
-                mesh.dof[c][m](i,j)=0.0;
+            mesh.dof[0][m](i,j)*=theta_p;
+            mesh.dof[1][m](i,j)*=theta_p;
+            mesh.dof[2][m](i,j)*=theta_p;
+            mesh.dof[3][m](i,j)*=theta_p;
         }
     }
 }
+}
+
 // ============================================================================
 // updateMesh — SSP-RK3 时间推进
 //
