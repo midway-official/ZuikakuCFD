@@ -20,9 +20,9 @@ ZuikakuCFD 是一个专为**二维可压缩 Euler 方程**设计的高性能并�
 ## 核心特性
 
 ### 物理模型
-- **守恒律系统**：$\frac{\partial \mathbf{U}}{\partial t} + \nabla \cdot (\mathbf{F}, \mathbf{G}) = 0$
-- **守恒变量**：$\mathbf{U} = [\rho, \rho u, \rho v, E]^T$
-- **二维笛卡尔网格**：均匀间距（$\Delta x = \Delta y = h$）
+- **守恒律系统**：$$\frac{\partial \mathbf{U}}{\partial t} + \nabla \cdot (\mathbf{F}, \mathbf{G}) = 0$$
+- **守恒变量**：$$\mathbf{U} = [\rho, \rho u, \rho v, E]^T$$
+- **二维笛卡尔网格**：均匀间距（$$\Delta x = \Delta y = h$$）
 - **周期或固壁边界**：支持边界类型标记
 
 ### 计算特性
@@ -90,7 +90,7 @@ python plot.ipynb
 ### WENO5 FV（有限体积法）
 
 **离散形式（有限体积）**：
-$$\frac{d\bar{\mathbf{U}}_{i,j}}{dt} = -\frac{1{\Delta x}}\left(F^*_{i+1/2,j} - F^*_{i-1/2,j}\right) - \frac{1}{\Delta y}\left(G^*_{i,j+1/2} - G^*_{i,j-1/2}\right)$$
+$$\frac{d\bar{\mathbf{U}}_{i,j}}{dt} = -\frac{1}{\Delta x}\left(F^*_{i+1/2,j} - F^*_{i-1/2,j}\right) - \frac{1}{\Delta y}\left(G^*_{i,j+1/2} - G^*_{i,j-1/2}\right)$$
 
 **重构策略**：
 - **MUSCL（二阶）**：4 点模板 + minmod/van Leer/superbee 斜率限制器
@@ -116,9 +116,9 @@ $$\frac{d\bar{\mathbf{U}}_{i,j}}{dt} = -\frac{1{\Delta x}}\left(F^*_{i+1/2,j} - 
 $$\int_K \phi_k \frac{\partial \mathbf{U}}{\partial t} d\mathbf{x} = -\int_K \left(F \frac{\partial \phi_k}{\partial x} + G \frac{\partial \phi_k}{\partial y}\right) d\mathbf{x} + \oint_{\partial K} \mathbf{F}^*(\mathbf{U}^-, \mathbf{U}^+) \cdot \mathbf{n} \phi_k d\gamma$$
 
 **基函数与自由度**：
-- **张量积 Legendre 基**：$\phi_{m}(\xi, \eta) = L_{p_x}(\xi) \cdot L_{p_y}(\eta)$，$\xi, \eta \in [-1, 1]$
-- **模式编号**：$m = p_x(P+1) + p_y$，$p_x, p_y \in [0, P]$
-- **总自由度**（每变量/单元）：$N_M = (P+1)^2$
+- **张量积 Legendre 基**：$$\phi_{m}(\xi, \eta) = L_{p_x}(\xi) \cdot L_{p_y}(\eta)$$，其中 $$\xi, \eta \in [-1, 1]$$
+- **模式编号**：$$m = p_x(P+1) + p_y$$，其中 $$p_x, p_y \in [0, P]$$
+- **总自由度**（每变量/单元）：$$N_M = (P+1)^2$$
 
 | P | 阶数 | 模式/单元 | CFL 安全限 | 推荐应用 |
 |---|------|---------|----------|---------|
@@ -160,10 +160,10 @@ nx ny da gamma
 
 | 文件 | 变量 | 备注 |
 |------|------|------|
-| `rho.dat` | 密度 $\rho$ | 标量场 |
-| `u.dat` | x 速度 $u$ | m/s |
-| `v.dat` | y 速度 $v$ | m/s |
-| `p.dat` | 压力 $p$ | Pa |
+| `rho.dat` | 密度 $$\rho$$ | 标量场 |
+| `u.dat` | x 速度 $$u$$ | m/s |
+| `v.dat` | y 速度 $$v$$ | m/s |
+| `p.dat` | 压力 $$p$$ | Pa |
 | `bctype.dat` | 边界标记 | 整数矩阵 |
 
 ### 边界类型编码
@@ -198,7 +198,7 @@ make distclean          # 同上 + 删除 report/
 
 ### DG 多版本生成
 
-Makefile 自动为 $P = 1, 2, 3$ 各生成一个可执行文件：
+Makefile 自动为 $$P = 1, 2, 3$$ 各生成一个可执行文件：
 
 ```bash
 ./solver_DG2   # P=1，二阶
@@ -265,7 +265,7 @@ result/
 ### 后处理脚本
 [plot.ipynb](plot.ipynb)：
 1. 加载并拼接多进程数据
-2. 恢复原始变量 $(\rho, u, v, p)$
+2. 恢复原始变量 $$(\rho, u, v, p)$$
 3. 计算 Mach 数、速度幅值
 4. 绘制 contour 图
 
@@ -361,12 +361,12 @@ void dphi2(int m, double xi, double eta,
 
 本项目已预装的标准测试为**二维黎曼问题**（2D Riemann Problem），网格规模 **512×512**，四个象限各具不同的初始状态：
 
-| 象限 | 区域 | 密度 ρ | 速度 u | 速度 v | 压力 p |
+| 象限 | 区域 | 密度 $$\rho$$ | 速度 $$u$$ | 速度 $$v$$ | 压力 $$p$$ |
 |------|------|--------|--------|--------|---------|
-| **右上** | $x \geq 0.85, y \geq 0.85$ | 1.5 | 0 | 0 | 1.5 |
-| **左上** | $x < 0.85, y \geq 0.85$ | 0.5323 | 1.206 | 0 | 0.3 |
-| **左下** | $x < 0.85, y < 0.85$ | 0.138 | 1.206 | -1.206 | 0.029 |
-| **右下** | $x \geq 0.85, y < 0.85$ | 0.5323 | 0 | -1.206 | 0.3 |
+| **右上** | $$x \geq 0.85, y \geq 0.85$$ | 1.5 | 0 | 0 | 1.5 |
+| **左上** | $$x < 0.85, y \geq 0.85$$ | 0.5323 | 1.206 | 0 | 0.3 |
+| **左下** | $$x < 0.85, y < 0.85$$ | 0.138 | 1.206 | -1.206 | 0.029 |
+| **右下** | $$x \geq 0.85, y < 0.85$$ | 0.5323 | 0 | -1.206 | 0.3 |
 
 **特征**：
 - 中心四条界面处各形成激波、膨胀波、接触间断等复杂流动结构
@@ -492,12 +492,12 @@ A: 3 层 ghost（WENO5）vs 1 层（DG）。若通信占比 >20%，考虑更多�
 ### DG 版本专用
 
 #### Legendre 正交基
-- **基函数**：$\varphi_m(\xi,\eta) = L_{p_x}(\xi) \cdot L_{p_y}(\eta)$，其中 $\xi,\eta \in [-1,1]$
-- **索引映射**：$m = p_x(P+1) + p_y$
-- **正交性**：$\int_{-1}^{1} L_i(x) L_j(x) dx = \frac{2}{2i+1} \delta_{ij}$
+- **基函数**：$$\varphi_m(\xi,\eta) = L_{p_x}(\xi) \cdot L_{p_y}(\eta)$$，其中 $$\xi,\eta \in [-1,1]$$
+- **索引映射**：$$m = p_x(P+1) + p_y$$
+- **正交性**：$$\int_{-1}^{1} L_i(x) L_j(x) dx = \frac{2}{2i+1} \delta_{ij}$$
 
 #### 弱形式离散
-对每个单元的每个测试函数 $\varphi_k$：
+对每个单元的每个测试函数 $$\varphi_k$$：
 
 $$M_k \frac{d\hat{u}_k}{dt} = \int_K \left( F \frac{\partial \varphi_k}{\partial \xi} + G \frac{\partial \varphi_k}{\partial \eta} \right) d\xi d\eta - \oint_{\partial K} F^* \cdot \hat{n} \varphi_k d\gamma$$
 
@@ -505,12 +505,12 @@ $$M_k \frac{d\hat{u}_k}{dt} = \int_K \left( F \frac{\partial \varphi_k}{\partial
 - **面积分**：界面处多项式直接求值 + HLLC 数值通flux
 
 #### 限制器
-- **Cockburn-Shu 限制器**：用 minmod 作用在线性模式（$p_x+p_y\leq 1$）
+- **Cockburn-Shu 限制器**：用 minmod 作用在线性模式（$$p_x+p_y\leq 1$$）
 - **自适应衰减**：若线性模式被限制，高阶模式置零（退化为分段线性）
 - **作用**：消除激波/间断附近的 Gibbs 振荡
 
 #### CFL 准则（自动 DT）
-- **理论限制**：$\Delta t \leq \frac{C}{2P+1} \cdot \frac{h}{\lambda_{\max}}$（C=0.9 安全系数）
+- **理论限制**：$$\Delta t \leq \frac{C}{2P+1} \cdot \frac{h}{\lambda_{\max}}$$（C=0.9 安全系数）
 - **函数**：`computeMaxSpeedDG()` 对每格 4 个角点求多项式值 → 波速
 
 ---
@@ -538,7 +538,7 @@ result/<step>/
 ### 守恒律系统（2D 欧拉方程）
 $$\frac{\partial \mathbf{U}}{\partial t} + \frac{\partial \mathbf{F}}{\partial x} + \frac{\partial \mathbf{G}}{\partial y} = 0$$
 
-其中守恒变量 $\mathbf{U} = [\rho, \rho u, \rho v, E]^T$，物理通量通过原始变量 $(p, u, v)$ 计算。
+其中守恒变量 $$\mathbf{U} = [\rho, \rho u, \rho v, E]^T$$，物理通量通过原始变量 $$(p, u, v)$$ 计算。
 
 ### CFL 限制
 
@@ -550,7 +550,7 @@ $$\text{CFL} = \frac{(|u| + |v| + a) \cdot dt}{da}$$
 自动计算（基于 Cockburn-Shu 准则）或用户指定时间步。若指定 `auto`，程序计算安全值：
 $$\Delta t_{\text{safe}} = \frac{0.9}{2(2P+1)} \cdot \frac{h}{\lambda_{\max}}$$
 
-其中 $a = \sqrt{\gamma p / \rho}$ 为声速，$\lambda_{\max}$ 为最大特征速度。
+其中 $$a = \sqrt{\gamma p / \rho}$$ 为声速，$$\lambda_{\max}$$ 为最大特征速度。
 
 ##  编译与系统要求
 
