@@ -722,172 +722,206 @@ inline double basis(int m, double xi, double eta)
 
     return P(px,xi) * P(py,eta);
 }
-
 void applyLimiter(Mesh& mesh)
 {
     const int ny = mesh.ny;
     const int nx = mesh.nx;
-    const double alpha = 0.9; // Persson 指标阈值，需根据问题调整
 
+    const double kappa = 1.0;  // smooth width
 
-    // =============================
-    // Zhang–Shu positivity limiter
-    // =============================
+    const double s0 =
+        -4.0*log10((double)DG_P);
 
-      const double xi[4] =
-     {
-    -0.8611363115940526,
-    -0.3399810435848563,
-     0.3399810435848563,
-     0.8611363115940526
-    };
+    // ============================
+    // Persson shock detector
+    // ============================
 
-      const double eta[4] =
+    for(int i=3;i<ny-3;i++)
+    for(int j=3;j<nx-3;j++)
     {
-    -0.8611363115940526,
-    -0.3399810435848563,
-     0.3399810435848563,
-     0.8611363115940526
-    };
-    // 遍历内部单元
-    for (int i = 3; i < ny-3; ++i) {
-        for (int j = 3; j < nx-3; ++j) {
+        if(mesh.bctype(i,j)!=0) continue;
 
-            if (mesh.bctype(i,j) != 0) continue; // 仅处理内部流体
+        for(int c=0;c<4;c++)
+        {
+            double Etot = 0.0;
+            double Ep   = 0.0;
 
-            for (int c = 0; c < 4; ++c) {
+            for(int px=0;px<=DG_P;px++)
+            for(int py=0;py<=DG_P;py++)
+            {
+                int m = px*(DG_P+1)+py;
+                double a = mesh.dof[c][m](i,j);
 
-                // 模式 0 平均值
-                double u0 = mesh.dof[c][0](i,j);
+                Etot += a*a;
 
-                // 计算高阶模式能量
-                double Ehigh = 0.0;
-                double Etot   = u0*u0; // 包含平均值平方
+                if(px==DG_P || py==DG_P)
+                    Ep += a*a;
+            }
 
-                for (int m = 1; m < DG_NM; ++m) {
-                    double val = mesh.dof[c][m](i,j);
-                    Etot   += val*val;
-                    Ehigh  += val*val;
+            double s =
+                log10(Ep/(Etot+1e-20));
+
+            if(s > s0)
+            {
+                double eps;
+
+                if(s > s0 + kappa)
+                    eps = 1.0;
+                else
+                {
+                    double r =
+                      (s - s0)/kappa;
+
+                    eps =
+                    0.5*(1.0+
+                    sin(M_PI*(r-0.5)));
                 }
 
-                // Persson 指标 S = E_high / E_total
-                double S = Ehigh / (Etot + 1e-16);
+                for(int px=0;px<=DG_P;px++)
+                for(int py=0;py<=DG_P;py++)
+                {
+                    if(px==DG_P || py==DG_P)
+                    {
+                        int m =
+                        px*(DG_P+1)+py;
 
-                if (S > alpha) {
-                    for(int px=0;px<=DG_P;px++)
-                    for(int py=0;py<=DG_P;py++)
-                       {
-                       if(px==DG_P || py==DG_P)
-                       {
-                        int m = px*(DG_P+1)+py;
-                        mesh.dof[c][m](i,j)=0.0;
-                       }
-}
+                        mesh.dof[c][m](i,j)
+                        *= (1.0-eps);
+                    }
                 }
             }
         }
     }
+
+    // =====================================
+    // Zhang-Shu positivity limiter
+    // =====================================
+
+    const double xi[4] =
+    {
+    -0.8611363115940526,
+    -0.3399810435848563,
+     0.3399810435848563,
+     0.8611363115940526
+    };
+
+    const double eta[4] =
+    {
+    -0.8611363115940526,
+    -0.3399810435848563,
+     0.3399810435848563,
+     0.8611363115940526
+    };
+
     for(int i=3;i<ny-3;i++)
     for(int j=3;j<nx-3;j++)
-     {
-    double rho_avg = mesh.dof[0][0](i,j);
-
-    double theta_rho = 1.0;
-
-    // ===============================
-    // Step 1: density positivity
-    // ===============================
-
-    for(int a=0;a<4;a++)
-    for(int b=0;b<4;b++)
     {
-        double rho = 0.0;
+        double rho_avg =
+        mesh.dof[0][0](i,j);
 
-        for(int m=0;m<DG_NM;m++)
-        {
-            double phi = basis(m,xi[a],eta[b]);
-            rho += mesh.dof[0][m](i,j)*phi;
-        }
+        double theta_rho=1.0;
 
-        if(rho < 1e-12)
+        for(int a=0;a<4;a++)
+        for(int b=0;b<4;b++)
         {
-            double t =
+            double rho=0;
+
+            for(int m=0;m<DG_NM;m++)
+            {
+                double phi =
+                basis(m,xi[a],eta[b]);
+
+                rho+=
+                mesh.dof[0][m](i,j)*phi;
+            }
+
+            if(rho < 1e-12)
+            {
+                double t =
                 (rho_avg-1e-12)/
                 (rho_avg-rho+1e-14);
 
-            theta_rho = std::min(theta_rho,t);
+                theta_rho=
+                std::min(theta_rho,t);
+            }
         }
-    }
 
-    if(theta_rho < 1.0)
-    {
-        for(int m=1;m<DG_NM;m++)
+        if(theta_rho < 1.0)
         {
-            mesh.dof[0][m](i,j)*=theta_rho;
-            mesh.dof[1][m](i,j)*=theta_rho;
-            mesh.dof[2][m](i,j)*=theta_rho;
-            mesh.dof[3][m](i,j)*=theta_rho;
+            for(int m=1;m<DG_NM;m++)
+            {
+                mesh.dof[0][m](i,j)
+                *=theta_rho;
+
+                mesh.dof[1][m](i,j)
+                *=theta_rho;
+
+                mesh.dof[2][m](i,j)
+                *=theta_rho;
+
+                mesh.dof[3][m](i,j)
+                *=theta_rho;
+            }
         }
-    }
 
-    // ===============================
-    // Step 2: pressure positivity
-    // ===============================
+        double theta_p=1.0;
 
-    double theta_p = 1.0;
-
-    for(int a=0;a<4;a++)
-    for(int b=0;b<4;b++)
-    {
-        double rho=0,mx=0,my=0,E=0;
-
-        for(int m=0;m<DG_NM;m++)
+        for(int a=0;a<4;a++)
+        for(int b=0;b<4;b++)
         {
-            double phi=basis(m,xi[a],eta[b]);
+            double rho=0,mx=0,my=0,E=0;
 
-            rho+=mesh.dof[0][m](i,j)*phi;
-            mx +=mesh.dof[1][m](i,j)*phi;
-            my +=mesh.dof[2][m](i,j)*phi;
-            E  +=mesh.dof[3][m](i,j)*phi;
-        }
+            for(int m=0;m<DG_NM;m++)
+            {
+                double phi=
+                basis(m,xi[a],eta[b]);
 
-        if(rho <= 1e-12) continue;
+                rho+=mesh.dof[0][m](i,j)*phi;
+                mx +=mesh.dof[1][m](i,j)*phi;
+                my +=mesh.dof[2][m](i,j)*phi;
+                E  +=mesh.dof[3][m](i,j)*phi;
+            }
 
-        double u = mx/rho;
-        double v = my/rho;
+            if(rho<=1e-12) continue;
 
-        double p =
+            double u=mx/rho;
+            double v=my/rho;
+
+            double p=
             (mesh.gamma-1)*
             (E-0.5*rho*(u*u+v*v));
 
-        if(p < 1e-12)
-        {
-            double p_avg =
+            if(p<1e-12)
+            {
+                double p_avg=
                 (mesh.gamma-1)*
-                (mesh.dof[3][0](i,j)-
-                 0.5*(mesh.dof[1][0](i,j)*mesh.dof[1][0](i,j)
-                     +mesh.dof[2][0](i,j)*mesh.dof[2][0](i,j))
-                 /mesh.dof[0][0](i,j));
+                (mesh.dof[3][0](i,j)
+                -0.5*(mesh.dof[1][0](i,j)*
+                      mesh.dof[1][0](i,j)
+                     +mesh.dof[2][0](i,j)*
+                      mesh.dof[2][0](i,j))
+                /mesh.dof[0][0](i,j));
 
-            double t =
+                double t=
                 (p_avg-1e-12)/
                 (p_avg-p+1e-14);
 
-            theta_p = std::min(theta_p,t);
+                theta_p=
+                std::min(theta_p,t);
+            }
         }
-    }
 
-    if(theta_p < 1.0)
-    {
-        for(int m=1;m<DG_NM;m++)
+        if(theta_p < 1.0)
         {
-            mesh.dof[0][m](i,j)*=theta_p;
-            mesh.dof[1][m](i,j)*=theta_p;
-            mesh.dof[2][m](i,j)*=theta_p;
-            mesh.dof[3][m](i,j)*=theta_p;
+            for(int m=1;m<DG_NM;m++)
+            {
+                mesh.dof[0][m](i,j)*=theta_p;
+                mesh.dof[1][m](i,j)*=theta_p;
+                mesh.dof[2][m](i,j)*=theta_p;
+                mesh.dof[3][m](i,j)*=theta_p;
+            }
         }
     }
-}
 }
 
 // ============================================================================
