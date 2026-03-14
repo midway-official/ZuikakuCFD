@@ -1,202 +1,481 @@
-# ZuikakuCFD — 2D Euler 方程并行求解器
+# ZuikakuCFD — 二维欧拉方程高阶并行求解器
 
-本项目提供两种高阶求解器实现，均基于 MPI + Eigen，支持在多进程（列方向域分解）上并行求解：
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Language](https://img.shields.io/badge/language-C%2B%2B17-brightgreen)
+![MPI](https://img.shields.io/badge/parallel-MPI-orange)
 
-| 格式 | 描述 | 精度 | 特点 |
-|------|------|------|------|
-| **WENO5 FV** | 有限体积 + WENO5 重构 | 5阶 | 不连续解、激波锐利、经典稳定 |
-| **DG** | 间断伽辽金 + Legendre 基 | 可调(P=1,2,3) | 无需外部模板、通量局部化、多项式表示 |
+## 项目概览
 
-两个求解器都使用 **HLLC Riemann 通量** + **SSP-RK3 时间推进**。
+ZuikakuCFD 是一个专为**二维可压缩 Euler 方程**设计的高性能并行求解框架，提供两种互补的数值方法实现：
+
+| 求解方法 | 空间离散 | 时间推进 | 精度 | 特色 | 位置 |
+|---------|--------|--------|------|------|------|
+| **WENO5 FV** | WENO5 重构 | SSP-RK3 | 5 阶 | 经典稳定，激波锐利 | [src_WENO/](src_WENO/) |
+| **DG** | Legendre 多项式 | SSP-RK3 | 2/3/4 阶 | 无模板依赖，通量局部 | [src_DG/](src_DG/) |
+
+两个求解器均采用 **HLLC 近似 Riemann 求解器** 处理数值通量，使用 **列方向 MPI 域共分解** 实现并行。
 
 ---
 
-##  求解器选择指南
+## 核心特性
 
-### 🔵 使用 WENO5 FV 版本（`src_WENO/`）
-**推荐情景**：
-- 经典 FV 方法，生产级代码
-- 不连续解（激波、接触间断）问题
-- 需要高阶精度且稳定性保证
-- 熟悉有限体积方法的用户
+### 物理模型
+- **守恒律系统**：$\frac{\partial \mathbf{U}}{\partial t} + \nabla \cdot (\mathbf{F}, \mathbf{G}) = 0$
+- **守恒变量**：$\mathbf{U} = [\rho, \rho u, \rho v, E]^T$
+- **二维笛卡尔网格**：均匀间距（$\Delta x = \Delta y = h$）
+- **周期或固壁边界**：支持边界类型标记
 
-**编译与运行**：
+### 计算特性
+| 特性 | 描述 |
+|------|------|
+| **MPI 并行** | x 方向列分割，ghost 列通信，批量打包优化 |
+| **时间推进** | SSP-RK3（三阶强稳定性保持）|
+| **数值通量** | HLLC Riemann 求解器（处理接触间断与激波）|
+| **自适应 CFL** | 自动计算安全时间步（基于 lambda-max）|
+| **I/O** | 每 100 步输出 `.dat` 格式结果 |
+
+### 精度对比
+
+| 方法 | 最高阶数 | ghost 层数 | 模板宽度 | 适用场景 |
+|------|---------|----------|---------|---------|
+| MUSCL | 2 阶 | 3 | 4 点 | 低成本、光滑解 |
+| **WENO5** | **5 阶** | **3** | **6 点** | **激波、接触间断** |
+| DG(P=1) | 2 阶 | 1 | 双线性 | 光滑解或弱间断 |
+| DG(P=2) | 3 阶 | 1 | 双二次 | 均衡精度与成本 |
+| DG(P=3) | 4 阶 | 1 | 双三次 | 高精度、需小时间步 |
+
+---
+
+## 快速开始
+
+### 编译
+
 ```bash
+# 编译全部（WENO5 + DG P=1,2,3）
+make all
+
+# 仅编译 WENO5
 make weno
-mpirun -np 4 ./solver_WENO ./mesh_data 1e-4 1000
-```
 
-### 🔴 使用 DG 版本（`src_DG/`）
-**推荐情景**：
-- 研究或对比多项式方法
-- 光滑或弱间断解
-- 无需宽模板依赖（仅 1 层 ghost）
-- 研究高阶方法的优缺点
-
-**编译与运行**：
-```bash
+# 仅编译 DG（默认 P=2）
 make dg
-# DG: P=1 (4模式/格) 或 P=2 (9模式/格)，见 src_DG/fluid.h 中 DG_P
-mpirun -np 4 ./solver_DG ./mesh_data auto 1000
+```
+
+### 运行
+
+#### WENO5 有限体积格式
+```bash
+mpirun -np 4 ./solver_WENO ./2D-Riemann 1e-4 1000
+# 参数：网格目录 dt 时间步数
+```
+
+#### DG 间断伽辽金格式（P=2）
+```bash
+mpirun -np 4 ./solver_DG2 ./2D-Riemann auto 1000
+# 参数：网格目录 {auto|dt值} 时间步数
+```
+
+### 可视化
+
+```bash
+python plot.ipynb
+# 加载结果/result/*/, 绘制密度、压力、速度、Mach数
+# 参考详见下文"典型测试用例"的结果展示
 ```
 
 ---
 
-##  核心特性
+## 方法细节
 
-### 共有特性
-- **MPI 并行**：按列（x 方向）分域，各进程维护 ghost 列并通信
-- **稳定时间推进**：SSP-RK3（Strong Stability Preserving）三阶格式
-- **通量求解**：HLLC Riemann 求解器，处理 2D 守恒律
-- **网格输入**：从磁盘读取参数与初始条件（`params.txt` + `.dat` 文件）
-- **周期输出**：每 100 步输出结果到 `result/<step>/` 目录
+### WENO5 FV（有限体积法）
 
-### WENO5 FV 特有
-- **五阶精度**：WENO5（Weighted Essentially Non-Oscillatory）重构
-- **灵活重构**：支持 MUSCL（二阶）与 WENO5（五阶）切换
-- **3 层 ghost**：WENO5 需要 6 点模板
+**离散形式（有限体积）**：
+$$\frac{d\bar{\mathbf{U}}_{i,j}}{dt} = -\frac{1{\Delta x}}\left(F^*_{i+1/2,j} - F^*_{i-1/2,j}\right) - \frac{1}{\Delta y}\left(G^*_{i,j+1/2} - G^*_{i,j-1/2}\right)$$
 
-### DG 特有
-- **可调阶数**：P=1（二阶）/ P=2（三阶）/ P=3（四阶）
-- **多项式表示**：Legendre 正交基，无需外部重构模板
-- **1 层 ghost**：DG 界面处直接多项式求值
-- **Cockburn-Shu 限制器**：消除 Gibbs 振荡
+**重构策略**：
+- **MUSCL（二阶）**：4 点模板 + minmod/van Leer/superbee 斜率限制器
+- **WENO5（五阶）**：6 点模板，Jiang-Shu 光滑指示子
+  - 光滑区：完全 5 阶精度
+  - 间断区：自动退化为低阶保证 TVD 性质
+
+**关键函数**：
+- [src_WENO/fluid.cpp](src_WENO/fluid.cpp#L234)：`weno5_reconstruct()`
+- [src_WENO/fluid.cpp](src_WENO/fluid.cpp#L274)：`hllcFlux()`
+- [src_WENO/solver.cpp](src_WENO/solver.cpp)：主求解循环
+
+**优势**：
+- 经典成熟、生产级代码
+- 激波捕捉能力强
+- 需要 3 层 ghost（通信开销大）
 
 ---
 
-##  网格数据格式
+### DG 间断伽辽金法
 
-### 参数文件 (`mesh/params.txt`)
+**弱形式（每单元 K）**：
+$$\int_K \phi_k \frac{\partial \mathbf{U}}{\partial t} d\mathbf{x} = -\int_K \left(F \frac{\partial \phi_k}{\partial x} + G \frac{\partial \phi_k}{\partial y}\right) d\mathbf{x} + \oint_{\partial K} \mathbf{F}^*(\mathbf{U}^-, \mathbf{U}^+) \cdot \mathbf{n} \phi_k d\gamma$$
+
+**基函数与自由度**：
+- **张量积 Legendre 基**：$\phi_{m}(\xi, \eta) = L_{p_x}(\xi) \cdot L_{p_y}(\eta)$，$\xi, \eta \in [-1, 1]$
+- **模式编号**：$m = p_x(P+1) + p_y$，$p_x, p_y \in [0, P]$
+- **总自由度**（每变量/单元）：$N_M = (P+1)^2$
+
+| P | 阶数 | 模式/单元 | CFL 安全限 | 推荐应用 |
+|---|------|---------|----------|---------|
+| 1 | 2 阶 | 4 | 0.167 | 激波问题 |
+| 2 | 3 阶 | 9 | 0.100 | **均衡型**（默认）|
+| 3 | 4 阶 | 16 | 0.067 | 光滑问题 |
+
+**限制器（Cockburn-Shu）**：
+在激波/陡峭梯度处自动激活，
+1. 对线性模式应用 minmod
+2. 若激活，清零高阶模式
+
+**关键函数**：
+- [src_DG/fluid.cpp](src_DG/fluid.cpp#L79)：`invMass()`、`dphi2()`
+- [src_DG/solver.cpp](src_DG/solver.cpp#L13)：`dgCFLLimit()`、`computeMaxSpeedDG_omp()`
+
+**优势**：
+- 仅单层 ghost，通信少
+- 多项式表示便于后处理（微分、采样）
+- 每单元自由度多（存储、计算成本）
+
+---
+
+## 网格格式
+
+### 参数文件 (`params.txt`)
 ```
 nx ny da gamma
 ```
+| 字段 | 含义 | 示例 |
+|------|------|------|
+| `nx` | 全局 x 方向单元数 | 512 |
+| `ny` | 全局 y 方向单元数 | 512 |
+| `da` | 均匀网格间距 | 1.0 |
+| `gamma` | 比热比 | 1.4 |
 
-- `nx`, `ny`：全局格子数（不含 ghost）
-- `da`：均匀网格间距（$\Delta x = \Delta y = da$）
-- `gamma`：比热比（理想气体，通常 1.4）
+### 数据文件（`.dat` ）
+纯文本矩阵格式，行优先，尺寸 `ny × nx`：
 
-### 数据文件（纯文本矩阵，行优先）
-每个 `.dat` 文件的行数为 `ny`，列数为 `nx`：
+| 文件 | 变量 | 备注 |
+|------|------|------|
+| `rho.dat` | 密度 $\rho$ | 标量场 |
+| `u.dat` | x 速度 $u$ | m/s |
+| `v.dat` | y 速度 $v$ | m/s |
+| `p.dat` | 压力 $p$ | Pa |
+| `bctype.dat` | 边界标记 | 整数矩阵 |
 
-| 文件 | 含义 |
-|------|------|
-| `rho.dat` | 密度 $\rho$ |
-| `u.dat` | x 方向速度 $u$ |
-| `v.dat` | y 方向速度 $v$ |
-| `p.dat` | 压力 $p$ |
-| `bctype.dat` | 边界类型标记（整数） |
-
-**边界类型编码**：
-- `0`：内部流体单元
-- `-1`：固壁 ghost（复制边界条件）
-- `-3`：MPI 进程间 ghost（通信填充）
-
----
-
-##  依赖 (Requirements)
-
-- C++17 兼容编译器
-- MPI：`mpic++` / `mpirun`
-- Eigen3（头文件即可）
-
->  请确保系统已安装 MPI（OpenMPI、MPICH 等）并可从命令行使用 `mpic++`。
+### 边界类型编码
+```
+ 0 : 内部单元（参与计算）
+-1 : 固壁 ghost（镜像复制）
+-3 : MPI 进程间 ghost（通信填充）
+```
 
 ---
 
-##  构建（Build）
+## 编译与配置
 
-### 构建两个版本（推荐）
+### 系统要求
+- **C++ 编译器**：支持 C++17（GCC 7+、Clang 5+、MSVC 2017+）
+- **MPI**：OpenMPI、MPICH 等（带 mpic++ 前端编译器）
+- **Eigen3**：仅需头文件（已包含或系统库）
+
+### 编译选项
+
 ```bash
+# 标准编译
 make all
+
+# 调试模式（需修改 Makefile，去掉 -O3）
+make clean && make all
+
+# 清理
+make clean              # 删除 build/ 和可执行文件
+make distclean          # 同上 + 删除 report/
 ```
 
-### 仅构建 WENO5 版本
+### DG 多版本生成
+
+Makefile 自动为 $P = 1, 2, 3$ 各生成一个可执行文件：
+
 ```bash
-make weno
+./solver_DG2   # P=1，二阶
+./solver_DG3   # P=2，三阶
+./solver_DG4   # P=3，四阶
 ```
-输出：`solver_WENO`
 
-### 仅构建 DG 版本
-```bash
-make dg
-```
-输出：`solver_DG`（默认 P=1）
-
-### 配置 DG 阶数
-编辑 [src_DG/fluid.h](src_DG/fluid.h#L19)，修改 `DG_P` 值：
-```cpp
-static constexpr int DG_P = 1;  // 改为 1, 2 或 3
-```
-然后重新编译：`make clean && make dg`
-
-| DG_P | 阶数 | 模式数 | CFL 限制 |
-|------|------|--------|---------|
-| 1 | 2 阶 | 4 | ~0.167 |
-| 2 | 3 阶 | 9 | ~0.100 |
-| 3 | 4 阶 | 16 | ~0.071 |
+编译时通过 `-DDG_P_VAL=<P>` 宏传递阶数参数。
 
 ---
 
-##  运行（Run）
+## 运行示例
 
-### WENO5 FV 版本
+### 例 1：WENO5 求解 Riemann 问题
 
 ```bash
-mpirun -np <进程数> ./solver_WENO <网格目录> <dt> <时间步数>
+# 编译
+make weno
+
+# 在 4 进程上运行，固定时间步
+mpirun -np 4 ./solver_WENO ./2D-Riemann 1e-4 5000
+# 输出：result/step_<k>/ 中各进程的 U0_*.dat 等文件
 ```
 
-示例：
+### 例 2：DG(P=2) 自适应 CFL
+
 ```bash
-mpirun -np 4 ./solver_WENO ./2D-Riemann 1e-4 1000
+# 编译（默认 P=2）
+make dg
+
+# 自动计算 CFL，运行 1000 步
+mpirun -np 4 ./solver_DG3 ./2D-Riemann auto 1000
+# CFL 由 dgCFLLimit() 确定，dt 自动调整
 ```
 
-**参数说明**：
-- `<网格目录>`：包含 `params.txt` 和 `*.dat` 的目录
-- `<dt>`：固定时间步长
-- `<时间步数>`：总迭代步数
+### 例 3：性能对标
+
+```bash
+# WENO5
+mpirun -np 8 ./solver_WENO ./2D-Riemann 1e-4 10000
+
+# DG(P=1)：同等精度，但模式数少
+mpirun -np 8 ./solver_DG2 ./2D-Riemann auto 10000
+
+# 输出：性能统计报告（wall time, load balance）
+```
+
+---
+
+## 输出与可视化
+
+### 结果文件结构
+```
+result/
+├── step_0000/
+│   ├── U0_0.dat      # rank 0 的密度
+│   ├── U1_0.dat      # rank 0 的 x 动量
+│   ├── U2_0.dat      # rank 0 的 y 动量
+│   └── U3_0.dat      # rank 0 的能量
+├── step_0100/
+└── ...
+```
+
+### 后处理脚本
+[plot.ipynb](plot.ipynb)：
+1. 加载并拼接多进程数据
+2. 恢复原始变量 $(\rho, u, v, p)$
+3. 计算 Mach 数、速度幅值
+4. 绘制 contour 图
+
+**使用**：
+```bash
+jupyter notebook plot.ipynb
+# 修改 data_dir='result', n_splits=<进程数>-1
+```
+
+---
+
+## 代码组织
+
+### 文件结构
+```
+ZuikakuCFD/
+├── src_WENO/
+│   ├── fluid.h          # 数据结构、API 声明
+│   ├── fluid.cpp        # WENO5 FV 实现
+│   └── solver.cpp       # MPI 主循环、时间推进
+├── src_DG/
+│   ├── fluid.h          # DG 网格类、模态系数
+│   ├── fluid.cpp        # Legendre 基、弱形式离散
+│   └── solver.cpp       # DG 求解器、自适应 CFL
+├── 2D-Riemann/          # 示例网格数据
+├── img/                 # 测试结果展示图
+│   ├── WENO5.png        # WENO5 结果
+│   ├── DG2.png          # DG(P=2) 结果
+│   └── DG3.png          # DG(P=3) 结果
+├── Makefile             # 构建脚本（支持多版本 DG）
+├── plot.ipynb           # 可视化后处理脚本
+└── README.md            # 本文件
+```
+
+### 核心类与接口
+
+#### Mesh 类（共有）
+```cpp
+class Mesh {
+  int nx, ny;              // 网格尺寸（含 ghost）
+  double da, gamma;        // 间距、比热比
+  
+  MatrixXd rho, u, v, p;  // 原始变量
+  MatrixXd U0, U1, U2, U3; // 守恒变量平均值
+  
+  // DG 专用
+  vector<MatrixXd> dof[4]; // dof[变量][模式]
+  MatrixXi bctype;        // 边界标记
+};
+```
+
+#### WENO5 重构
+```cpp
+void weno5_reconstruct(
+  double UL2, UL1, UP, UR1, UR2, UR3,
+  double& UL, UR);  // 5 点输出左右界面值
+```
+
+#### DG 基函数
+```cpp
+double phi2(int m, double xi, double eta);  // φ_m(ξ,η)
+void dphi2(int m, double xi, double eta, 
+           double& dxi, double& deta);      // ∇φ_m
+```
+
+---
+
+## 性能优化
+
+### WENO5 版本
+- **数据结构**：栈分配 `double[4]` 替代 `vector`，消除堆分配
+- **优化的 ghost 填充**：两遍扫描而非 O(N²) bctype 检测
+- **OpenMP 并行**：内层 i-j 循环并行化，无 data race
+- **内联优化**：关键函数 WENO5、HLLC 采用 `inline + __attribute__`
 
 ### DG 版本
+- **矩阵预计算**：phi(m, ξ_k, η_l) 预缓存
+- **批量通信**：所有 4 变量×DG_NM 模式一次通信打包
+- **OpenMP 并行**：主循环并行，合并 recover+maxspeed 减访存
 
-```bash
-mpirun -np <进程数> ./solver_DG <网格目录> <dt_或_auto> <时间步数>
-```
-
-示例（自动 CFL）：
-```bash
-mpirun -np 4 ./solver_DG ./2D-Riemann auto 1000
-```
-
-示例（固定时间步）：
-```bash
-mpirun -np 4 ./solver_DG ./2D-Riemann 1e-5 1000
-```
-
-**参数说明**：
-- `<dt_或_auto>`：`auto`（自动 CFL 计算）或指定数值
-- DG auto-CFL 基于 Cockburn-Shu 稳定准则：$\Delta t \leq \frac{C}{2P+1} \cdot \frac{h}{\lambda_{\max}}$
+### MPI 通信
+- **列分割**：沿 x 方向均分，最小化通信边界
+- **ghost 层优化**：
+  - WENO5：3 层 ghost，但支持批量拷贝
+  - DG：1 层 ghost，通信量减 67%
+- **中阶段通信**：SSP-RK3 各阶段后调用 ghost 交换
 
 ---
 
-## 关键模块说明
+## 典型测试用例：二维黎曼问题
 
-### 共有模块
+### 四象限初始条件
 
-#### 网格分割与通信
-- **`splitMeshVertically()`**：沿 x 方向均匀分割网格给 n 个进程，包含 ghost 层
-- **`exchangeColumns()` 与 `exchangeConservativeColumns()`**：各进程交换 ghost 列数据（支持守恒变量并发通信）
+本项目已预装的标准测试为**二维黎曼问题**（2D Riemann Problem），网格规模 **512×512**，四个象限各具不同的初始状态：
 
-#### 数值通量
-- **HLLC 求解器**：两版本通用，处理守恒律 Riemann 问题
+| 象限 | 区域 | 密度 ρ | 速度 u | 速度 v | 压力 p |
+|------|------|--------|--------|--------|---------|
+| **右上** | $x \geq 0.85, y \geq 0.85$ | 1.5 | 0 | 0 | 1.5 |
+| **左上** | $x < 0.85, y \geq 0.85$ | 0.5323 | 1.206 | 0 | 0.3 |
+| **左下** | $x < 0.85, y < 0.85$ | 0.138 | 1.206 | -1.206 | 0.029 |
+| **右下** | $x \geq 0.85, y < 0.85$ | 0.5323 | 0 | -1.206 | 0.3 |
 
-### WENO5 FV 版本专用
+**特征**：
+- 中心四条界面处各形成激波、膨胀波、接触间断等复杂流动结构
+- 考验求解器的**多维激波捕捉、间断识别、不对称性处理**能力
+- 标准测试用例（见 LeVeque《数值方法》、Lax-Liu 等文献）
 
-#### 重构格式
-| 格式 | 阶数 | 模板大小 | 函数 | 特点 |
-|------|------|---------|------|------|
-| MUSCL | 2 阶 | 4 点 | `muscl_reconstruct()` | 低耗、通用限制器 |
-| **WENO5** | **5 阶** | **6 点** | `weno5_reconstruct()` | **高精度、自适应光滑性** |
+### 求解方法对比
 
-WENO5 采用 Jiang-Shu 光滑指示子，自动在光滑区使用全 5 阶精度，在间断处退化为低阶保证稳定性。
+下面展示三种求解器在相同初始条件、相同网格、不同精度下的密度云图对比：
+
+#### WENO5 有限体积（5阶精度）
+![WENO5 密度分布](img/WENO5.png)
+- **激波捕捉**：锐利清晰，无振荡
+- **接触间断**：分辨率高
+- **计算特点**：3层 ghost，全网格 WENO5 重构
+
+#### DG(P=2) 间断伽辽金（3阶精度）
+![DG P=2 密度分布](img/DG2.png)
+- **精度适中**：消耗少，结果光滑
+- **激波处理**：限制器自动激活，无显著 Gibbs 振荡
+- **计算特点**：单层 ghost，9 个模式/单元，自适应 CFL
+
+#### DG(P=3) 间断伽辽金（4阶精度）  
+![DG P=3 密度分布](img/DG3.png)
+- **精度最高**：多项式度数高，局部光滑区分辨细节
+- **细节保留**：激波附近结构清晰
+- **计算特点**：单层 ghost，16 个模式/单元，时间步严格
+
+### 复现步骤
+
+```bash
+# 1. 编译所有版本
+make all
+
+# 2. 运行 WENO5（在 4 进程上，1000 步）
+mpirun -np 4 ./solver_WENO ./2D-Riemann 1e-4 1000
+
+# 3. 运行 DG(P=2) 自动 CFL
+mpirun -np 4 ./solver_DG3 ./2D-Riemann auto 1000
+
+# 4. 运行 DG(P=3)
+mpirun -np 4 ./solver_DG4 ./2D-Riemann auto 1000
+
+# 5. 可视化（修改 plot.ipynb 中的 data_dir）
+jupyter notebook plot.ipynb
+```
+
+### 结果对比
+
+| 指标 | WENO5 | DG(P=2) | DG(P=3) |
+|------|-------|---------|---------|
+| 空间精度 | 5 阶 | 3 阶 | 4 阶 |
+| 激波锐利度 | 优秀 | 良好 | 优秀 |
+| Ghost 通信开销 | 大（3层） | 小（1层） | 小（1层） |
+| 单元 DOF | 1 | 9 | 16 |
+| 推荐应用 | 强激波问题 | 均衡型 | 高精度需求 |
+
+---
+
+## 实验与验证
+
+### 推荐测试用例
+1. **2D Riemann Problem**（已实装）：四象限多灰激波结构，见上文
+2. **Sod Shock Tube**：1D Riemann 问题，激波+膨胀波+接触间断
+3. **Lax Problem**：高强度激波，考验激波捕捉
+4. **Double Mach Reflection**：2D 复杂结构，验证多维格式
+5. **Smooth Flow**：平缓流动，验证精度阶
+
+### 精度验证（收敛性）
+```bash
+# 生成不同网格尺寸 (nx, ny)
+# 计算相同物理时间 t_end 的 L2 误差
+# 图示化：log(h) vs log(error) 
+# 斜率应接近理论阶数
+```
+
+---
+
+## 许可与参考
+
+- **License**：[MIT License](LICENSE)
+- **作者**：midway酱
+- **参考文献**：
+  - Cockburn, B., & Shu, C. W. (2001). Runge–Kutta Discontinuous Galerkin Methods for Convection-Dominated Problems. *Journal of Scientific Computing*, 16(3).
+  - Jiang, G. S., & Shu, C. W. (1996). Efficient Implementation of Weighted ENO Schemes. *Journal of Computational Physics*, 126(1).
+  - Toro, E. F. (2009). *Riemann Solvers and Numerical Methods for Fluid Dynamics*. Springer.
+
+---
+
+## 常见问题
+
+**Q: 如何选择 WENO5 还是 DG？**  
+A: WENO5 适合复杂激波问题；DG 适合光滑或多项式适配场景。精度相当时，DG 通信少。
+
+**Q: DG 为什么需要限制器？**  
+A: 间断处多项式通常产生 Gibbs 振荡。Cockburn-Shu 限制器在检测到陡峭梯度时自动激活。
+
+**Q: 如何调整时间步？**  
+A: WENO5 使用固定 dt；DG 支持 `auto` 自动 CFL。手动调需修改 `dgCFLLimit()` 或 `dgSafeDt()`。
+
+**Q: ghost 列交换的性能瓶颈？**  
+A: 3 层 ghost（WENO5）vs 1 层（DG）。若通信占比 >20%，考虑更多进程并减少边界比。
+
+---
+
+## 联系与反馈
+
+- Issue Tracker：[GitHub Issues](../../issues)
+- Pull Request：欢迎贡献优化或新特性
 
 #### 空间离散
 - **有限体积法**：格心点处迹近，4 个界面通量求和
@@ -367,11 +646,11 @@ make dg
 ### Q：DG vs WENO5 选择
 | 问题 | DG | WENO5 |
 |------|-----|--------|
-| 激波捕捉 | ○ 需限制器 | ✓ 自适应 |
-| 光滑区精度 | ✓ 多项式 | ✓ 高阶 |
-| 编程复杂度 | ✓ 相对简洁 | ✗ 复杂 |
-| 计算成本 | ✗ 高阶模式多 | ✓ 单值 |
-| 教学/研究 | ✓ 清晰结构 | ✓ 工业标准 |
+| 激波捕捉 | 需限制器 | 自适应 |
+| 光滑区精度 | 多项式优秀 | 高阶精度 |
+| 编程复杂度 | 相对简洁 | 较为复杂 |
+| 计算成本 | 高阶模式多 | 单值存储 |
+| 教学/研究 | 清晰结构 | 工业标准 |
 
 ---
 
