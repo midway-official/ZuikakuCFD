@@ -65,36 +65,17 @@ $$\mathbf{U}^{n+1} = \frac{1}{3}\mathbf{U}^n + \frac{2}{3}\left(\mathbf{U}^{(2)}
 
 在统一网格 $[x_i, x_{i+1}] \times [y_j, y_{j+1}]$ 上定义单元均值：
 
-$$\bar{\mathbf{U}}_{i,j}^n = \frac{1}{\Delta x \Delta y} \int{x_i}^{x{i+1}} \int_{y_j}^{y_{j+1}} \mathbf{U}(x,y,t^n) \, dy\,dx$$
+$$\bar{\mathbf{U}}_{i,j}^n = \frac{1}{\Delta x \Delta y} \int_{x_i}^{x_{i+1}} \int_{y_j}^{y_{j+1}} \mathbf{U}(x,y,t^n) \, dy\,dx$$
 
 有限体积更新格式：
 
-$$
-\frac{d\bar{\mathbf{U}}_{i,j}}{dt}
-=
--\frac{1}{\Delta x}
-\left(
-\mathbf{F}^{*}_{i+1/2,j}
--
-\mathbf{F}^{*}_{i-1/2,j}
-\right)
--
-\frac{1}{\Delta y}
-\left(
-\mathbf{G}^{*}_{i,j+1/2}
--
-\mathbf{G}^{*}_{i,j-1/2}
-\right)
-$$
+$$\frac{d\bar{\mathbf{U}}_{i,j}}{dt} = -\frac{1}{\Delta x}\left(\mathbf{F}^*_{i+1/2,j} - \mathbf{F}^*_{i-1/2,j}\right) - \frac{1}{\Delta y}\left(\mathbf{G}^*_{i,j+1/2} - \mathbf{G}^*_{i,j-1/2}\right)$$
 
-其中 $\mathbf{F}^{*}_{i+1/2,j}$ 和
-$\mathbf{G}^{*}_{i,j+1/2}$ 为数值通量。
+其中 $\mathbf{F}^*_{i+1/2,j}$ 和 $\mathbf{G}^*_{i,j+1/2}$ 为数值通量。
 
 #### WENO5 重构
 
-在 $x$ 方向界面 $i+1/2$ 处重构左右状态使用6点模板：
-
-$$\text{模板：} \quad u_{i-2}, u_{i-1}, u_i, u_{i+1}, u_{i+2}, u_{i+3}$$
+在 $x$ 方向界面处重构左右状态，使用6点模板 $\{u_{i-2}, u_{i-1}, u_i, u_{i+1}, u_{i+2}, u_{i+3}\}$。
 
 通过 Jiang-Shu 光滑指示子自适应组合三个二次多项式，在光滑区达到5阶精度，在间断区自动降阶保证 TVD 性质。
 
@@ -104,18 +85,12 @@ $$\text{模板：} \quad u_{i-2}, u_{i-1}, u_i, u_{i+1}, u_{i+2}, u_{i+3}$$
 
 在界面处求解 Riemann 问题，得到数值通量：
 
-$$
-\mathbf{F}^* =
-\begin{cases}
-\mathbf{F}_L & \text{if } S_L \ge 0 \\
-
-\mathbf{F}_L^* & \text{if } S_L < 0 \le S_* \\
-
-\mathbf{F}_R^* & \text{if } S_* \le 0 < S_R \\
-
-\mathbf{F}_R & \text{if } S_R \le 0
-\end{cases}
-$$
+$$\mathbf{F}^* = \begin{cases}
+\mathbf{F}_L & \text{if } S_L \geq 0 \\
+\mathbf{F}^*_L & \text{if } S_L < 0 \leq S^* \\
+\mathbf{F}^*_R & \text{if } S^* \leq 0 < S_R \\
+\mathbf{F}_R & \text{if } S_R \leq 0
+\end{cases}$$
 
 其中 $S_L, S^*, S_R$ 为左波、接触间断、右波的速度，$\mathbf{F}^*_L, \mathbf{F}^*_R$ 为中间状态的通量。
 
