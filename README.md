@@ -55,48 +55,57 @@ $$\mathbf{U}^{n+1} = \frac{1}{3}\mathbf{U}^n + \frac{2}{3}\left(\mathbf{U}^{(2)}
 
 其中 $\mathcal{L}(\mathbf{U})$ 为空间离散算子。
 
-
+---
 ## 数值方法
 
 ## 方法一：WENO5 有限体积格式
 
 ### 空间离散
+
 在统一网格 $[x_i, x_{i+1}] \times [y_j, y_{j+1}]$ 上定义单元均值：
 
-$$
-\bar{\mathbf{U}}_{i,j}^{n} = \frac{1}{\Delta x \Delta y} \int_{x_i}^{x_{i+1}} \int_{y_j}^{y_{j+1}} \mathbf{U}(x,y,t^n) \, dy \, dx
-$$
+```math
+\bar{\mathbf{U}}_{i,j}^{n}
+=
+\frac{1}{\Delta x \Delta y}
+\int_{x_i}^{x_{i+1}}
+\int_{y_j}^{y_{j+1}}
+\mathbf{U}(x,y,t^n)\,dy\,dx
+```
 
 有限体积更新格式：
 
-$$
+```math
 \frac{d\bar{\mathbf{U}}_{i,j}}{dt}
 =
 -\frac{1}{\Delta x}
 \left(
-\mathbf{F}_{i+1/2,j}^{*} - \mathbf{F}_{i-1/2,j}^{*}
+\mathbf{F}_{i+1/2,j}^{*}-\mathbf{F}_{i-1/2,j}^{*}
 \right)
 -
 \frac{1}{\Delta y}
 \left(
-\mathbf{G}_{i,j+1/2}^{*} - \mathbf{G}_{i,j-1/2}^{*}
+\mathbf{G}_{i,j+1/2}^{*}-\mathbf{G}_{i,j-1/2}^{*}
 \right)
-$$
+```
+
 其中 $\mathbf{F}_{i+1/2,j}^*$ 和 $\mathbf{G}_{i,j+1/2}^*$ 为数值通量。
 
 ### HLLC Riemann 求解器
+
 在界面处求解 Riemann 问题，得到数值通量：
 
-$$
-\mathbf{F}^* =
+```math
+\mathbf{F}^*=
 \begin{cases}
 \mathbf{F}_L & S_L \ge 0 \\
 \mathbf{F}_L^* & S_L < 0 \le S^* \\
 \mathbf{F}_R^* & S^* \le 0 < S_R \\
 \mathbf{F}_R & S_R \le 0
 \end{cases}
-$$
+```
 
+---
 
 ### 方法二：DG 间断伽辽金格式
 
