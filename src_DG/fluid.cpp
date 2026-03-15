@@ -440,8 +440,8 @@ void muscl_reconstruct(double UL2, double UL1, double UR1, double UR2,
     UR = UR1 - 0.5*sigma_R;
 }
 
-// ============================================================================
-// HLLC 数值通量（与原版相同，供 DG 面积分调用）
+// ============================================================================ 
+// HLLC 数值通量（DG 面积分调用）
 // ============================================================================
 void hllcFlux(
     double UL0,double UL1,double UL2,double UL3,
@@ -449,88 +449,183 @@ void hllcFlux(
     double gamma,
     double& F0,double& F1,double& F2,double& F3)
 {
-    const double eps=1e-20;
-    double rhoL=std::max(UL0,eps), uL=UL1/rhoL, vL=UL2/rhoL, EL=UL3/rhoL;
-    double pL=std::max((gamma-1.0)*(UL3-0.5*rhoL*(uL*uL+vL*vL)),eps);
-    double aL=sqrt(gamma*pL/rhoL);
+    const double eps = 1e-20;
 
-    double rhoR=std::max(UR0,eps), uR=UR1/rhoR, vR=UR2/rhoR, ER=UR3/rhoR;
-    double pR=std::max((gamma-1.0)*(UR3-0.5*rhoR*(uR*uR+vR*vR)),eps);
-    double aR=sqrt(gamma*pR/rhoR);
+    // --- 左状态 ---
+    double rhoL = std::max(UL0, eps);
+    double uL   = UL1 / rhoL;
+    double vL   = UL2 / rhoL;
+    double EL   = UL3 / rhoL; // 单位质量能量
+    double pL   = std::max((gamma-1.0)*(UL3 - 0.5*rhoL*(uL*uL + vL*vL)), eps);
+    double aL   = sqrt(std::max(gamma*pL/rhoL, eps));
 
-    double FL0=rhoL*uL, FL1=rhoL*uL*uL+pL, FL2=rhoL*uL*vL, FL3=(UL3+pL)*uL;
-    double FR0=rhoR*uR, FR1=rhoR*uR*uR+pR, FR2=rhoR*uR*vR, FR3=(UR3+pR)*uR;
+    // --- 右状态 ---
+    double rhoR = std::max(UR0, eps);
+    double uR   = UR1 / rhoR;
+    double vR   = UR2 / rhoR;
+    double ER   = UR3 / rhoR;
+    double pR   = std::max((gamma-1.0)*(UR3 - 0.5*rhoR*(uR*uR + vR*vR)), eps);
+    double aR   = sqrt(std::max(gamma*pR/rhoR, eps));
 
-    double sqL=sqrt(rhoL), sqR=sqrt(rhoR), den=sqL+sqR;
-    double u_roe=(sqL*uL+sqR*uR)/den;
-    double h_roe=(sqL*(EL+pL/rhoL)+sqR*(ER+pR/rhoR))/den;
-    double c_roe=sqrt(std::max((gamma-1.0)*(h_roe-0.5*u_roe*u_roe),eps));
+    // --- 物理通量 ---
+    double FL0 = rhoL*uL, FL1 = rhoL*uL*uL + pL, FL2 = rhoL*uL*vL, FL3 = (UL3+pL)*uL;
+    double FR0 = rhoR*uR, FR1 = rhoR*uR*uR + pR, FR2 = rhoR*uR*vR, FR3 = (UR3+pR)*uR;
 
-    double SL=std::min(uL-aL, u_roe-c_roe);
-    double SR=std::max(uR+aR, u_roe+c_roe);
+    // --- Roe 平均 ---
+    double sqL = sqrt(rhoL), sqR = sqrt(rhoR);
+    double den = sqL + sqR;
+    if (den < eps) den = eps; // 防止除零
+    double u_roe = (sqL*uL + sqR*uR)/den;
+    double h_roe = (sqL*(EL+pL/rhoL) + sqR*(ER+pR/rhoR))/den;
+    double c_roe = sqrt(std::max((gamma-1.0)*(h_roe - 0.5*u_roe*u_roe), eps));
+
+    // --- 波速 ---
+    double SL = std::min(uL-aL, u_roe-c_roe);
+    double SR = std::max(uR+aR, u_roe+c_roe);
 
     if (SL >= 0.0) { F0=FL0; F1=FL1; F2=FL2; F3=FL3; return; }
     if (SR <= 0.0) { F0=FR0; F1=FR1; F2=FR2; F3=FR3; return; }
 
-    double num=pR-pL+rhoL*uL*(SL-uL)-rhoR*uR*(SR-uR);
-    double den2=rhoL*(SL-uL)-rhoR*(SR-uR);
-    if (fabs(den2)<1e-20) den2=(den2>=0?1e-20:-1e-20);
-    double Sstar=num/den2;
+    double num = pR - pL + rhoL*uL*(SL-uL) - rhoR*uR*(SR-uR);
+    double den2 = rhoL*(SL-uL) - rhoR*(SR-uR);
+    if (fabs(den2) < eps) den2 = (den2>=0? eps : -eps); // 防止除零
+    double Sstar = num / den2;
 
-    auto star_state=[&](double rho,double u,double v,double E,
-                        double p,double S)->std::array<double,4>{
-        double c=rho*(S-u)/(S-Sstar);
-        return{c, c*Sstar, c*v, c*(E+(Sstar-u)*(Sstar+p/(rho*(S-u))))};
+    auto star_state = [&](double rho,double u,double v,double E,double p,double S) -> std::array<double,4> {
+        double denom = S - Sstar;
+        if (fabs(denom) < eps) denom = (denom >=0 ? eps : -eps);
+        double c = rho*(S-u)/denom;
+        double term = (Sstar-u)*(Sstar + p/(rho*(S-u)));
+        if (std::isnan(term) || std::isinf(term)) term = 0.0; // 防止 NaN
+        return {c, c*Sstar, c*v, c*(E + term)};
     };
 
     if (Sstar >= 0.0) {
-        auto UL_s=star_state(rhoL,uL,vL,EL,pL,SL);
-        F0=FL0+SL*(UL_s[0]-UL0); F1=FL1+SL*(UL_s[1]-UL1);
-        F2=FL2+SL*(UL_s[2]-UL2); F3=FL3+SL*(UL_s[3]-UL3);
+        auto UL_s = star_state(rhoL,uL,vL,EL,pL,SL);
+        F0 = FL0 + SL*(UL_s[0]-UL0);
+        F1 = FL1 + SL*(UL_s[1]-UL1);
+        F2 = FL2 + SL*(UL_s[2]-UL2);
+        F3 = FL3 + SL*(UL_s[3]-UL3);
     } else {
-        auto UR_s=star_state(rhoR,uR,vR,ER,pR,SR);
-        F0=FR0+SR*(UR_s[0]-UR0); F1=FR1+SR*(UR_s[1]-UR1);
-        F2=FR2+SR*(UR_s[2]-UR2); F3=FR3+SR*(UR_s[3]-UR3);
+        auto UR_s = star_state(rhoR,uR,vR,ER,pR,SR);
+        F0 = FR0 + SR*(UR_s[0]-UR0);
+        F1 = FR1 + SR*(UR_s[1]-UR1);
+        F2 = FR2 + SR*(UR_s[2]-UR2);
+        F3 = FR3 + SR*(UR_s[3]-UR3);
     }
 }
 
 // ============================================================================
-// fillDGGhostCells（DG 版固壁 ghost 填充）
-//
-// 对 bctype==-1 的 ghost 格，从最近的内部格（bctype==0）复制所有 DG_NM 个模式。
-// 注意：此处沿用"镜像复制"（slip wall），严格 DG 应对法向速度模式取反，
-//       但镜像复制在粗网格和低马赫数下通常足够稳定。
+// HLLE 数值通量（高马赫数鲁棒版本）
 // ============================================================================
+void hlleFlux(
+    double UL0, double UL1, double UL2, double UL3,
+    double UR0, double UR1, double UR2, double UR3,
+    double gamma,
+    double& F0, double& F1, double& F2, double& F3)
+{
+    const double eps = 1e-8;
+
+    // --- 左状态 ---
+    double rhoL = std::max(UL0, eps);
+    double uL   = UL1 / rhoL;
+    double vL   = UL2 / rhoL;
+    double EL   = UL3;
+    double pL   = std::max((gamma-1.0)*(EL - 0.5*rhoL*(uL*uL + vL*vL)), eps);
+    double aL   = sqrt(std::max(gamma*pL/rhoL, eps));
+    double HL   = (EL+pL)/rhoL;
+
+    // --- 右状态 ---
+    double rhoR = std::max(UR0, eps);
+    double uR   = UR1 / rhoR;
+    double vR   = UR2 / rhoR;
+    double ER   = UR3;
+    double pR   = std::max((gamma-1.0)*(ER - 0.5*rhoR*(uR*uR + vR*vR)), eps);
+    double aR   = sqrt(std::max(gamma*pR/rhoR, eps));
+    double HR   = (ER+pR)/rhoR;
+
+    // --- Roe 平均 ---
+    double sqL = sqrt(rhoL), sqR = sqrt(rhoR);
+    double invDen = 1.0 / std::max(sqL + sqR, eps);
+
+    double u_roe = (sqL*uL + sqR*uR)*invDen;
+    double v_roe = (sqL*vL + sqR*vR)*invDen;
+    double h_roe = (sqL*HL + sqR*HR)*invDen;
+    double c_roe = sqrt(std::max((gamma-1.0)*(h_roe - 0.5*(u_roe*u_roe + v_roe*v_roe)), eps));
+
+    // --- 波速估计 ---
+    double SL = std::min(uL - aL, u_roe - c_roe);
+    double SR = std::max(uR + aR, u_roe + c_roe);
+
+    // --- 物理通量 ---
+    double FL0 = rhoL*uL, FL1 = rhoL*uL*uL + pL, FL2 = rhoL*uL*vL, FL3 = (EL+pL)*uL;
+    double FR0 = rhoR*uR, FR1 = rhoR*uR*uR + pR, FR2 = rhoR*uR*vR, FR3 = (ER+pR)*uR;
+
+    // --- HLLE 数值通量 ---
+    if (SL >= 0.0) {
+        F0=FL0; F1=FL1; F2=FL2; F3=FL3;
+    } else if (SR <= 0.0) {
+        F0=FR0; F1=FR1; F2=FR2; F3=FR3;
+    } else {
+        double invDiff = 1.0 / std::max(SR - SL, eps);
+        F0 = (SR*FL0 - SL*FR0 + SL*SR*(UR0-UL0)) * invDiff;
+        F1 = (SR*FL1 - SL*FR1 + SL*SR*(UR1-UL1)) * invDiff;
+        F2 = (SR*FL2 - SL*FR2 + SL*SR*(UR2-UL2)) * invDiff;
+        F3 = (SR*FL3 - SL*FR3 + SL*SR*(UR3-UL3)) * invDiff;
+    }
+}
 static void fillDGGhostCells(Mesh& mesh)
 {
     const int ny=mesh.ny, nx=mesh.nx;
     constexpr int OFF[6] = {-3,-2,-1,1,2,3};
 
-    // y 方向 ghost
+    // --- Y 方向 Ghost 填充 (处理顶/底边界) ---
     for (int i = 3; i < ny-3; ++i)
         for (int j = 3; j < nx-3; ++j) {
             if (mesh.bctype(i,j) != 0) continue;
             for (int dk : OFF) {
                 int ni = i+dk;
                 if ((unsigned)ni >= (unsigned)ny) continue;
-                if (mesh.bctype(ni,j) == -1)
+                
+                int bt = mesh.bctype(ni,j);
+                if (bt == -1) { // 零梯度 (Zero-Gradient)
                     for (int c = 0; c < 4; ++c)
                         for (int m = 0; m < DG_NM; ++m)
                             mesh.dof[c][m](ni,j) = mesh.dof[c][m](i,j);
+                } 
+                else if (bt == 1) { // 滑移边界 (Slip: y是法向)
+                    for (int m = 0; m < DG_NM; ++m) {
+                        mesh.dof[0][m](ni,j) =  mesh.dof[0][m](i,j); // rho
+                        mesh.dof[1][m](ni,j) =  mesh.dof[1][m](i,j); // rho*u (切向)
+                        mesh.dof[2][m](ni,j) = -mesh.dof[2][m](i,j); // rho*v (法向取反)
+                        mesh.dof[3][m](ni,j) =  mesh.dof[3][m](i,j); // E
+                    }
+                }
             }
         }
 
-    // x 方向 ghost
+    // --- X 方向 Ghost 填充 (处理左/右边界) ---
     for (int i = 3; i < ny-3; ++i)
         for (int j = 3; j < nx-3; ++j) {
             if (mesh.bctype(i,j) != 0) continue;
             for (int dk : OFF) {
-                int nj = j+dk;
+                int nj = j+dk; // 修正：这里应使用 nj
                 if ((unsigned)nj >= (unsigned)nx) continue;
-                if (mesh.bctype(i,nj) == -1)
+
+                int bt = mesh.bctype(i,nj);
+                if (bt == -1) { // 零梯度
                     for (int c = 0; c < 4; ++c)
                         for (int m = 0; m < DG_NM; ++m)
                             mesh.dof[c][m](i,nj) = mesh.dof[c][m](i,j);
+                }
+                else if (bt == 1) { // 滑移边界 (Slip: x是法向)
+                    for (int m = 0; m < DG_NM; ++m) {
+                        mesh.dof[0][m](i,nj) =  mesh.dof[0][m](i,j); // rho
+                        mesh.dof[1][m](i,nj) = -mesh.dof[1][m](i,j); // rho*u (法向取反)
+                        mesh.dof[2][m](i,nj) =  mesh.dof[2][m](i,j); // rho*v (切向)
+                        mesh.dof[3][m](i,nj) =  mesh.dof[3][m](i,j); // E
+                    }
+                }
             }
         }
 }
@@ -635,7 +730,7 @@ void computeRHS(Mesh& mesh, double dt,
                 evalU(i, j,   +1.0, eta, UL);   // 当前格右边界
                 evalU(i, j+1, -1.0, eta, UR);   // 右邻格左边界
                 double F0,F1,F2,F3;
-                hllcFlux(UL[0],UL[1],UL[2],UL[3], UR[0],UR[1],UR[2],UR[3], gam, F0,F1,F2,F3);
+                hlleFlux(UL[0],UL[1],UL[2],UL[3], UR[0],UR[1],UR[2],UR[3], gam, F0,F1,F2,F3);
                 double Fstar[4] = {F0,F1,F2,F3};
                 for (int m = 0; m < DG_NM; ++m) {
                     double bv = phi2(m, +1.0, eta) * w;
@@ -651,7 +746,7 @@ void computeRHS(Mesh& mesh, double dt,
                 evalU(i, j-1, +1.0, eta, UL);   // 左邻格右边界
                 evalU(i, j,   -1.0, eta, UR);   // 当前格左边界
                 double F0,F1,F2,F3;
-                hllcFlux(UL[0],UL[1],UL[2],UL[3], UR[0],UR[1],UR[2],UR[3], gam, F0,F1,F2,F3);
+                hlleFlux(UL[0],UL[1],UL[2],UL[3], UR[0],UR[1],UR[2],UR[3], gam, F0,F1,F2,F3);
                 double Fstar[4] = {F0,F1,F2,F3};
                 for (int m = 0; m < DG_NM; ++m) {
                     double bv = phi2(m, -1.0, eta) * w;
@@ -670,7 +765,7 @@ void computeRHS(Mesh& mesh, double dt,
                 evalU(i+1, j, xi, -1.0, UR);   // 下邻格上边界
                 double G0,Gn,Gt,G3;
                 // 交换 U[1]↔U[2]：令 v 为法向速度（HLLC 要求法向速度在 [1] 位置）
-                hllcFlux(UL[0],UL[2],UL[1],UL[3], UR[0],UR[2],UR[1],UR[3], gam, G0,Gn,Gt,G3);
+                hlleFlux(UL[0],UL[2],UL[1],UL[3], UR[0],UR[2],UR[1],UR[3], gam, G0,Gn,Gt,G3);
                 // 解映射：Gn → rho*v 通量（[2] 分量），Gt → rho*u 通量（[1] 分量）
                 double Gstar[4] = {G0, Gt, Gn, G3};
                 for (int m = 0; m < DG_NM; ++m) {
@@ -687,7 +782,7 @@ void computeRHS(Mesh& mesh, double dt,
                 evalU(i-1, j, xi, +1.0, UL);   // 上邻格下边界
                 evalU(i,   j, xi, -1.0, UR);   // 当前格上边界
                 double G0,Gn,Gt,G3;
-                hllcFlux(UL[0],UL[2],UL[1],UL[3], UR[0],UR[2],UR[1],UR[3], gam, G0,Gn,Gt,G3);
+                hlleFlux(UL[0],UL[2],UL[1],UL[3], UR[0],UR[2],UR[1],UR[3], gam, G0,Gn,Gt,G3);
                 double Gstar[4] = {G0, Gt, Gn, G3};
                 for (int m = 0; m < DG_NM; ++m) {
                     double bv = phi2(m, xi, -1.0) * w;
@@ -722,20 +817,21 @@ inline double basis(int m, double xi, double eta)
 
     return P(px,xi) * P(py,eta);
 }
-void applyLimiter(Mesh& mesh)
+void applyLimiter(Mesh& mesh) 
 {
     const int ny = mesh.ny;
     const int nx = mesh.nx;
 
     const double kappa = 1.0;  // smooth width
+    const double s0 = -4.0*log10((double)DG_P);
 
-    const double s0 =
-        -4.0*log10((double)DG_P);
+    const double RHO_MIN = 1e-4;
+    const double P_MIN   = 1e-4;
+    const double EPS     = 1e-10;
 
     // ============================
     // Persson shock detector
     // ============================
-
     for(int i=3;i<ny-3;i++)
     for(int j=3;j<nx-3;j++)
     {
@@ -758,23 +854,17 @@ void applyLimiter(Mesh& mesh)
                     Ep += a*a;
             }
 
-            double s =
-                log10(Ep/(Etot+1e-20));
+            double s = log10(Ep/(Etot+EPS));
 
             if(s > s0)
             {
                 double eps;
-
                 if(s > s0 + kappa)
                     eps = 1.0;
                 else
                 {
-                    double r =
-                      (s - s0)/kappa;
-
-                    eps =
-                    0.5*(1.0+
-                    sin(M_PI*(r-0.5)));
+                    double r = (s - s0)/kappa;
+                    eps = 0.5*(1.0 + sin(M_PI*(r-0.5)));
                 }
 
                 for(int px=0;px<=DG_P;px++)
@@ -782,11 +872,8 @@ void applyLimiter(Mesh& mesh)
                 {
                     if(px==DG_P || py==DG_P)
                     {
-                        int m =
-                        px*(DG_P+1)+py;
-
-                        mesh.dof[c][m](i,j)
-                        *= (1.0-eps);
+                        int m = px*(DG_P+1)+py;
+                        mesh.dof[c][m](i,j) *= (1.0-eps);
                     }
                 }
             }
@@ -796,53 +883,47 @@ void applyLimiter(Mesh& mesh)
     // =====================================
     // Zhang-Shu positivity limiter
     // =====================================
-
-    const double xi[4] =
-    {
-    -0.8611363115940526,
-    -0.3399810435848563,
-     0.3399810435848563,
-     0.8611363115940526
-    };
-
-    const double eta[4] =
-    {
-    -0.8611363115940526,
-    -0.3399810435848563,
-     0.3399810435848563,
-     0.8611363115940526
-    };
+    const double xi[4]  = {-0.8611363115940526, -0.3399810435848563,
+                             0.3399810435848563, 0.8611363115940526};
+    const double eta[4] = {-0.8611363115940526, -0.3399810435848563,
+                             0.3399810435848563, 0.8611363115940526};
 
     for(int i=3;i<ny-3;i++)
     for(int j=3;j<nx-3;j++)
     {
-        double rho_avg =
-        mesh.dof[0][0](i,j);
+        // ------------------------------
+        // Step 0: 强制零阶模态非负
+        // ------------------------------
+        mesh.dof[0][0](i,j) = std::max(mesh.dof[0][0](i,j), RHO_MIN);
 
-        double theta_rho=1.0;
+        double rho0 = mesh.dof[0][0](i,j);
+        double mx0  = mesh.dof[1][0](i,j);
+        double my0  = mesh.dof[2][0](i,j);
+        double E0   = mesh.dof[3][0](i,j);
 
+        double p0 = (mesh.gamma-1.0)*(E0 - 0.5*(mx0*mx0 + my0*my0)/rho0);
+        if(p0 < P_MIN)
+        {
+            E0 = P_MIN/(mesh.gamma-1.0) + 0.5*(mx0*mx0 + my0*my0)/rho0;
+            mesh.dof[3][0](i,j) = E0;
+        }
+
+        // ------------------------------
+        // Step 1: 检查 rho
+        // ------------------------------
+        double theta_rho = 1.0;
         for(int a=0;a<4;a++)
         for(int b=0;b<4;b++)
         {
-            double rho=0;
-
+            double rho = 0.0;
             for(int m=0;m<DG_NM;m++)
             {
-                double phi =
-                basis(m,xi[a],eta[b]);
-
-                rho+=
-                mesh.dof[0][m](i,j)*phi;
+                rho += mesh.dof[0][m](i,j) * basis(m, xi[a], eta[b]);
             }
-
-            if(rho < 1e-12)
+            if(rho < RHO_MIN)
             {
-                double t =
-                (rho_avg-1e-12)/
-                (rho_avg-rho+1e-14);
-
-                theta_rho=
-                std::min(theta_rho,t);
+                double t = (rho0 - RHO_MIN)/(rho0 - rho + EPS);
+                theta_rho = std::min(theta_rho, t);
             }
         }
 
@@ -850,64 +931,44 @@ void applyLimiter(Mesh& mesh)
         {
             for(int m=1;m<DG_NM;m++)
             {
-                mesh.dof[0][m](i,j)
-                *=theta_rho;
-
-                mesh.dof[1][m](i,j)
-                *=theta_rho;
-
-                mesh.dof[2][m](i,j)
-                *=theta_rho;
-
-                mesh.dof[3][m](i,j)
-                *=theta_rho;
+                mesh.dof[0][m](i,j) *= theta_rho;
+                mesh.dof[1][m](i,j) *= theta_rho;
+                mesh.dof[2][m](i,j) *= theta_rho;
+                mesh.dof[3][m](i,j) *= theta_rho;
             }
         }
 
-        double theta_p=1.0;
-
+        // ------------------------------
+        // Step 2: 检查 p
+        // ------------------------------
+        double theta_p = 1.0;
         for(int a=0;a<4;a++)
         for(int b=0;b<4;b++)
         {
-            double rho=0,mx=0,my=0,E=0;
-
+            double rho=0.0, mx=0.0, my=0.0, E=0.0;
             for(int m=0;m<DG_NM;m++)
             {
-                double phi=
-                basis(m,xi[a],eta[b]);
-
-                rho+=mesh.dof[0][m](i,j)*phi;
-                mx +=mesh.dof[1][m](i,j)*phi;
-                my +=mesh.dof[2][m](i,j)*phi;
-                E  +=mesh.dof[3][m](i,j)*phi;
+                double phi = basis(m, xi[a], eta[b]);
+                rho += mesh.dof[0][m](i,j)*phi;
+                mx  += mesh.dof[1][m](i,j)*phi;
+                my  += mesh.dof[2][m](i,j)*phi;
+                E   += mesh.dof[3][m](i,j)*phi;
             }
 
-            if(rho<=1e-12) continue;
+            if(rho <= RHO_MIN) continue;
 
-            double u=mx/rho;
-            double v=my/rho;
+            double u = mx/rho;
+            double v = my/rho;
+            double p = (mesh.gamma-1.0)*(E - 0.5*rho*(u*u + v*v));
 
-            double p=
-            (mesh.gamma-1)*
-            (E-0.5*rho*(u*u+v*v));
-
-            if(p<1e-12)
+            if(p < P_MIN)
             {
-                double p_avg=
-                (mesh.gamma-1)*
-                (mesh.dof[3][0](i,j)
-                -0.5*(mesh.dof[1][0](i,j)*
-                      mesh.dof[1][0](i,j)
-                     +mesh.dof[2][0](i,j)*
-                      mesh.dof[2][0](i,j))
-                /mesh.dof[0][0](i,j));
+                double p_avg = (mesh.gamma-1.0)*(mesh.dof[3][0](i,j)
+                                -0.5*(mesh.dof[1][0](i,j)*mesh.dof[1][0](i,j)
+                                      +mesh.dof[2][0](i,j)*mesh.dof[2][0](i,j))/mesh.dof[0][0](i,j));
 
-                double t=
-                (p_avg-1e-12)/
-                (p_avg-p+1e-14);
-
-                theta_p=
-                std::min(theta_p,t);
+                double t = (p_avg - P_MIN)/(p_avg - p + EPS);
+                theta_p = std::min(theta_p, t);
             }
         }
 
@@ -915,10 +976,10 @@ void applyLimiter(Mesh& mesh)
         {
             for(int m=1;m<DG_NM;m++)
             {
-                mesh.dof[0][m](i,j)*=theta_p;
-                mesh.dof[1][m](i,j)*=theta_p;
-                mesh.dof[2][m](i,j)*=theta_p;
-                mesh.dof[3][m](i,j)*=theta_p;
+                mesh.dof[0][m](i,j) *= theta_p;
+                mesh.dof[1][m](i,j) *= theta_p;
+                mesh.dof[2][m](i,j) *= theta_p;
+                mesh.dof[3][m](i,j) *= theta_p;
             }
         }
     }

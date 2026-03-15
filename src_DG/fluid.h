@@ -170,7 +170,17 @@ void hllcFlux(
     double UR0, double UR1, double UR2, double UR3,
     double gamma,
     double& F0, double& F1, double& F2, double& F3);
-
+/**
+ * @brief HLLE 数值通量 - 针对高马赫数流动具有极高的鲁棒性
+ * * @param UL0-3 左状态守恒变量 (rho, rho*u, rho*v, E)
+ * @param UR0-3 右状态守恒变量
+ * @param gamma 绝热指数
+ */
+ void hll3Flux(
+    double UL0, double UL1, double UL2, double UL3,
+    double UR0, double UR1, double UR2, double UR3,
+    double gamma,
+    double& F0, double& F1, double& F2, double& F3);
 // ============================================================================
 // MUSCL 重构（保留以备使用，DG 主循环不调用）
 // ============================================================================
