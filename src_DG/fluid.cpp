@@ -449,7 +449,7 @@ void hllcFlux(
     double gamma,
     double& F0,double& F1,double& F2,double& F3)
 {
-    const double eps = 1e-20;
+    const double eps = 1e-6;
 
     // --- 左状态 ---
     double rhoL = std::max(UL0, eps);
@@ -524,7 +524,7 @@ void hlleFlux(
     double gamma,
     double& F0, double& F1, double& F2, double& F3)
 {
-    const double eps = 1e-8;
+    const double eps = 1e-6;
 
     // --- 左状态 ---
     double rhoL = std::max(UL0, eps);
@@ -730,7 +730,7 @@ void computeRHS(Mesh& mesh, double dt,
                 evalU(i, j,   +1.0, eta, UL);   // 当前格右边界
                 evalU(i, j+1, -1.0, eta, UR);   // 右邻格左边界
                 double F0,F1,F2,F3;
-                hlleFlux(UL[0],UL[1],UL[2],UL[3], UR[0],UR[1],UR[2],UR[3], gam, F0,F1,F2,F3);
+                hllcFlux(UL[0],UL[1],UL[2],UL[3], UR[0],UR[1],UR[2],UR[3], gam, F0,F1,F2,F3);
                 double Fstar[4] = {F0,F1,F2,F3};
                 for (int m = 0; m < DG_NM; ++m) {
                     double bv = phi2(m, +1.0, eta) * w;
@@ -746,7 +746,7 @@ void computeRHS(Mesh& mesh, double dt,
                 evalU(i, j-1, +1.0, eta, UL);   // 左邻格右边界
                 evalU(i, j,   -1.0, eta, UR);   // 当前格左边界
                 double F0,F1,F2,F3;
-                hlleFlux(UL[0],UL[1],UL[2],UL[3], UR[0],UR[1],UR[2],UR[3], gam, F0,F1,F2,F3);
+                hllcFlux(UL[0],UL[1],UL[2],UL[3], UR[0],UR[1],UR[2],UR[3], gam, F0,F1,F2,F3);
                 double Fstar[4] = {F0,F1,F2,F3};
                 for (int m = 0; m < DG_NM; ++m) {
                     double bv = phi2(m, -1.0, eta) * w;
@@ -765,7 +765,7 @@ void computeRHS(Mesh& mesh, double dt,
                 evalU(i+1, j, xi, -1.0, UR);   // 下邻格上边界
                 double G0,Gn,Gt,G3;
                 // 交换 U[1]↔U[2]：令 v 为法向速度（HLLC 要求法向速度在 [1] 位置）
-                hlleFlux(UL[0],UL[2],UL[1],UL[3], UR[0],UR[2],UR[1],UR[3], gam, G0,Gn,Gt,G3);
+                hllcFlux(UL[0],UL[2],UL[1],UL[3], UR[0],UR[2],UR[1],UR[3], gam, G0,Gn,Gt,G3);
                 // 解映射：Gn → rho*v 通量（[2] 分量），Gt → rho*u 通量（[1] 分量）
                 double Gstar[4] = {G0, Gt, Gn, G3};
                 for (int m = 0; m < DG_NM; ++m) {
@@ -782,7 +782,7 @@ void computeRHS(Mesh& mesh, double dt,
                 evalU(i-1, j, xi, +1.0, UL);   // 上邻格下边界
                 evalU(i,   j, xi, -1.0, UR);   // 当前格上边界
                 double G0,Gn,Gt,G3;
-                hlleFlux(UL[0],UL[2],UL[1],UL[3], UR[0],UR[2],UR[1],UR[3], gam, G0,Gn,Gt,G3);
+                hllcFlux(UL[0],UL[2],UL[1],UL[3], UR[0],UR[2],UR[1],UR[3], gam, G0,Gn,Gt,G3);
                 double Gstar[4] = {G0, Gt, Gn, G3};
                 for (int m = 0; m < DG_NM; ++m) {
                     double bv = phi2(m, xi, -1.0) * w;
@@ -823,11 +823,11 @@ void applyLimiter(Mesh& mesh)
     const int nx = mesh.nx;
 
     const double kappa = 1.0;  // smooth width
-    const double s0 = -4.0*log10((double)DG_P);
+    const double s0 = -3.0*log10((double)DG_P);
 
-    const double RHO_MIN = 1e-4;
-    const double P_MIN   = 1e-4;
-    const double EPS     = 1e-10;
+    const double RHO_MIN = 1e-8;
+    const double P_MIN   = 1e-8;
+    const double EPS     = 1e-8;
 
     // ============================
     // Persson shock detector
