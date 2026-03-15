@@ -277,6 +277,81 @@ jupyter notebook plot.ipynb
 
 ---
 
+## 典型测试用例
+
+### 高马赫数喷流问题（High Mach Jet）
+
+**物理背景**：
+超高速喷流在天体物理极端条件下的传播特性研究。喷流从左边界以极音速（Mach ≈ 2700）射出，与周围低速背景气体相互作用，产生复杂的激波、膨胀波和接触间断。
+
+**计算域与边界条件**：
+
+| 参数 | 值 | 备注 |
+|------|-----|------|
+| 计算域 | $[0, 1] \times [-0.25, 0.25]$ | 长宽比 4:1 |
+| 喷流出口 | x=0, $y \in [-0.05, 0.05]$ | 左边界条件 |
+| 背景气体 | $(\rho, u, v, p) = (0.5, 0, 0, 0.4127)$ | 整体初值 |
+| 喷流射流 | $(\rho, u, v, p) = (5, 800, 0, 0.4127)$ | 出口条件 |
+| 比热比 | $\gamma = 5/3$ | 单原子气体 |
+| 网格 | $nx=400, ny=200$ | 推荐 CFL $< 0.01$ |
+
+**网格初始化代码**：
+```python
+import numpy as np
+
+def generate_jet_mesh(nx=400, ny=200, gamma=5/3, output_dir="HighMachJet"):
+    """生成高马赫数喷流网格与初值"""
+    x_min, x_max, y_min, y_max = 0.0, 1.0, -0.25, 0.25
+    dx = (x_max - x_min) / nx
+    dy = (y_max - y_min) / ny
+    
+    rho = np.full((ny, nx), 0.5)
+    u = np.zeros((ny, nx))
+    v = np.zeros((ny, nx))
+    p = np.full((ny, nx), 0.4127)
+    
+    # 设置喷流出口区域 (x=0, y∈[-0.05, 0.05])
+    for i in range(ny):
+        yc = y_min + (i + 0.5) * dy
+        for j in range(min(3, nx)):  # 左边界前 3 层网格
+            if -0.05 <= yc <= 0.05:
+                rho[i,j], u[i,j] = 5.0, 800.0
+    
+    # 保存格式（与求解器兼容）
+    np.savetxt(f"{output_dir}/params.txt", [[nx, ny, dx, gamma]])
+    np.savetxt(f"{output_dir}/rho.dat", rho)
+    np.savetxt(f"{output_dir}/u.dat", u)
+    np.savetxt(f"{output_dir}/v.dat", v)
+    np.savetxt(f"{output_dir}/p.dat", p)
+
+if __name__ == "__main__":
+    generate_jet_mesh()
+```
+
+**求解器运行**：
+```bash
+# WENO5 求解器
+mpirun -np 4 ./solver_WENO ./HighMachJet 1e-5 5000
+
+# DG(P=2) 求解器
+mpirun -np 4 ./solver_DG3 ./HighMachJet auto 5000
+```
+
+**结果展示**：
+
+| WENO5 | DG(P=2) |
+|-------|---------|
+| ![HMJP.png](img/HMJP.png) | ![HMJV.png](img/HMJV.png) |
+
+**特征分析**：
+- **激波结构**：喷流头部形成强激波（压力突跃）
+- **膨胀扇**：喷流与背景的接触面两侧出现膨胀波
+- **接触间断**：密度与压力在接触面处不连续
+- **涡量爆发**：速度剪切导致剧烈涡量生成
+- **数值鲁棒性**：极速流动考验激波捕捉与 TVD 稳定性
+
+---
+
 ## 代码组织
 
 ### 文件结构
@@ -291,10 +366,13 @@ ZuikakuCFD/
 │   ├── fluid.cpp        # Legendre 基、弱形式离散
 │   └── solver.cpp       # DG 求解器、自适应 CFL
 ├── 2D-Riemann/          # 示例网格数据
+├── HighMachJet/         # 高马赫数喷流算例
 ├── img/                 # 测试结果展示图
-│   ├── WENO5.png        # WENO5 结果
-│   ├── DG2.png          # DG(P=2) 结果
-│   └── DG3.png          # DG(P=3) 结果
+│   ├── HMJP.png         # 喷流压力分布（WENO5）
+│   ├── HMJV.png         # 喷流速度幅值（DG）
+│   ├── WENO5.png        # Riemann 问题 WENO5 结果
+│   ├── DG2.png          # Riemann 问题 DG(P=2) 结果
+│   └── DG3.png          # Riemann 问题 DG(P=3) 结果
 ├── Makefile             # 构建脚本（支持多版本 DG）
 ├── plot.ipynb           # 可视化后处理脚本
 └── README.md            # 本文件

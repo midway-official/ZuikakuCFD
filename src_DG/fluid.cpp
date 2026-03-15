@@ -449,7 +449,7 @@ void hllcFlux(
     double gamma,
     double& F0,double& F1,double& F2,double& F3)
 {
-    const double eps = 1e-6;
+    const double eps = 1e-5;
 
     // --- 左状态 ---
     double rhoL = std::max(UL0, eps);
@@ -825,9 +825,9 @@ void applyLimiter(Mesh& mesh)
     const double kappa = 1.0;  // smooth width
     const double s0 = -3.0*log10((double)DG_P);
 
-    const double RHO_MIN = 1e-8;
-    const double P_MIN   = 1e-8;
-    const double EPS     = 1e-8;
+    const double RHO_MIN = 1e-5;
+    const double P_MIN   = 1e-5;
+    const double EPS     = 1e-5;
 
     // ============================
     // Persson shock detector
