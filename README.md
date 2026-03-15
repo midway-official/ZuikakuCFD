@@ -65,11 +65,11 @@ $$\mathbf{U}^{n+1} = \frac{1}{3}\mathbf{U}^n + \frac{2}{3}\left(\mathbf{U}^{(2)}
 
 在统一网格 $[x_i, x_{i+1}] \times [y_j, y_{j+1}]$ 上定义单元均值：
 
-$$\bar{\mathbf{U}}_{i,j}^n = \frac{1}{\Delta x \Delta y} \int_{x_i}^{x_{i+1}} \int_{y_j}^{y_{j+1}} \mathbf{U}(x,y,t^n) \, dy\,dx$$
+$$\bar{\mathbf{U}}_{i,j}^n = \frac{1}{\Delta x \Delta y} \int{x_i}^{x{i+1}} \int_{y_j}^{y_{j+1}} \mathbf{U}(x,y,t^n) \, dy\,dx$$
 
 有限体积更新格式：
 
-$$\frac{d\bar{\mathbf{U}}_{i,j}}{dt} = -\frac{1}{\Delta x}\left(\mathbf{F}^*_{i+1/2,j} - \mathbf{F}^*_{i-1/2,j}\right) - \frac{1}{\Delta y}\left(\mathbf{G}^*_{i,j+1/2} - \mathbf{G}^*_{i,j-1/2}\right)$$
+$$\frac{d\bar{\mathbf{U}}{i,j}}{dt} = -\frac{1}{\Delta x}\left(\mathbf{F}^*{i+1/2,j} - \mathbf{F}^*{i-1/2,j}\right) - \frac{1}{\Delta y}\left(\mathbf{G}^*{i,j+1/2} - \mathbf{G}^*{i,j-1/2}\right)$$
 
 其中 $\mathbf{F}^*_{i+1/2,j}$ 和 $\mathbf{G}^*_{i,j+1/2}$ 为数值通量。
 
