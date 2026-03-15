@@ -89,7 +89,10 @@ $$\mathbf{U}^{n+1} = \frac{1}{3}\mathbf{U}^n + \frac{2}{3}\left(\mathbf{U}^{(2)}
 \right)
 ```
 
-其中 $\mathbf{F}_{i+1/2,j}^*$ 和 $\mathbf{G}_{i,j+1/2}^*$ 为数值通量。
+数值通量由 Riemann 求解器计算得到：
+```math
+\text{其中 } \mathbf{F}_{i+1/2,j}^{*} \text{ 和 } \mathbf{G}_{i,j+1/2}^{*} \text{ 为数值通量}
+```
 
 ### HLLC Riemann 求解器
 
