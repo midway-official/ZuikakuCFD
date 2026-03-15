@@ -58,67 +58,34 @@ $$\mathbf{U}^{n+1} = \frac{1}{3}\mathbf{U}^n + \frac{2}{3}\left(\mathbf{U}^{(2)}
 ---
 ## 数值方法
 
-### 方法一：WENO5 有限体积格式
+## 方法一：WENO5 有限体积格式
 
-#### 空间离散
-
+### 空间离散
 在统一网格 $[x_i, x_{i+1}] \times [y_j, y_{j+1}]$ 上定义单元均值：
 
 $$
-\bar{\mathbf{U}}_{i,j}^{n}
-=
-\frac{1}{\Delta x \Delta y}
-\int_{x_i}^{x_{i+1}}
-\int_{y_j}^{y_{j+1}}
-\mathbf{U}(x,y,t^n)\,dy\,dx
+\bar{\mathbf{U}}_{i,j}^{n} = \frac{1}{\Delta x \Delta y} \int_{x_i}^{x_{i+1}} \int_{y_j}^{y_{j+1}} \mathbf{U}(x,y,t^n) \, dy \, dx
 $$
 
 有限体积更新格式：
-$$
-\frac{d\bar{\mathbf{U}}_{i,j}}{dt}=-\frac{1}{\Delta x}\left(\mathbf{F}_{i+1/2,j}^{*}-\mathbf{F}_{i-1/2,j}^{*}\right)-\frac{1}{\Delta y}\left(\mathbf{G}_{i,j+1/2}^{*}-\mathbf{G}_{i,j-1/2}^{*}\right)
-$$
-
-其中 ${F}_{i+1/2,j}^{*}$ 和 ${G}_{i,j+1/2}^{*}$ 为数值通量。
-
----
-
-### WENO5 重构
-
-在 $x$ 方向界面 $i+1/2$ 处重构左右状态，使用六点模板
 
 $$
-u_{i-2},\;
-u_{i-1},\;
-u_i,\;
-u_{i+1},\;
-u_{i+2},\;
-u_{i+3}.
+\frac{d\bar{\mathbf{U}}_{i,j}}{dt} = -\frac{1}{\Delta x}\left(\mathbf{F}_{i+1/2,j}^{*} - \mathbf{F}_{i-1/2,j}^{*}\right) - \frac{1}{\Delta y}\left(\mathbf{G}_{i,j+1/2}^{*} - \mathbf{G}_{i,j-1/2}^{*}\right)
 $$
 
-通过 Jiang–Shu 光滑指示子自适应组合三个二次多项式，在光滑区达到五阶精度，在间断区自动降阶以保证 TVD 性质。
-
-参考函数：`src_WENO/fluid.cpp` 的 `weno5_reconstruct()`。
-
----
+其中 $\mathbf{F}_{i+1/2,j}^*$ 和 $\mathbf{G}_{i,j+1/2}^*$ 为数值通量。
 
 ### HLLC Riemann 求解器
-
 在界面处求解 Riemann 问题，得到数值通量：
 
-$$\mathbf{F}^{*} =\begin{cases}\mathbf{F}_L & \text{if } S_L \ge 0 
-
-\mathbf{F}_L^{*} & \text{if } S_L < 0 \le S_{*} 
-
-\mathbf{F}_R^{*} & \text{if } S_{*} \le 0 < S_R 
-
-\mathbf{F}_R & \text{if } S_R \le 0
+$$
+\mathbf{F}^* = \begin{cases} 
+\mathbf{F}_L & \text{if } S_L \ge 0 \\
+\mathbf{F}_L^* & \text{if } S_L < 0 \le S^* \\
+\mathbf{F}_R^* & \text{if } S^* \le 0 < S_R \\
+\mathbf{F}_R & \text{if } S_R \le 0 
 \end{cases}
 $$
-
-其中 $S_L, S_{*}, S_R$ 为左波、接触间断和右波速度，
-$\mathbf{F}_L^{*}$ 与 $\mathbf{F}_R^{*}$ 为中间状态通量。
-
-参考函数：`src_WENO/fluid.cpp` 的 `hllcFlux()`。
 ---
 
 ### 方法二：DG 间断伽辽金格式
@@ -151,26 +118,40 @@ $$\mathbf{U}_h(\xi,\eta,t) = \sum_{m=0}^{N_M-1} \hat{\mathbf{U}}_m(t) \varphi_m(
 - **体积分**（3×3点）：精确至5次多项式
 - **面积分**（3点）：与多项式阶次匹配
 
-#### Cockburn-Shu 限制器
+#### 限制器与数值稳定性 (Limiter & Stability)
 
-**设计目标**：在保持光滑区高阶精度的前提下，消除激波附近的 Gibbs 振荡。
+为了处理激波捕捉和极值区域的数值稳定性，本程序实现了双重限制机制：
 
-**实现策略**：
-1. 对单元 $(i,j)$ 的线性模式 $(m = 1, 2)$ 应用 minmod 限制
-2. 若线性系数被修改，清零所有高阶模式 $(m \geq 3)$
+##### 1. Persson 激波检测器 (Artificial Viscosity / Modal Decay)
+基于 Legendre 多项式的模态能量谱（Modal Energy Spectrum）来识别解的间断性。
+- **原理**：检查最高阶模态能量 $E_p$ 与总能量 $E_{tot}$ 的占比。若占比超过阈值 $s_0$，说明高阶项存在 Gibbs 振荡，解不再光滑。
+- **平滑策略**：引入自适应算子 $\epsilon$，对最高阶模态进行衰减：
+  $$s = \log_{10} \left( \frac{E_p}{E_{tot} + \epsilon} \right)$$
+- **代码实现**：参考 `applyLimiter()` 中的 `Persson shock detector` 部分。
 
-**Minmod 函数**：
-$$\text{minmod}(a_1, a_2, \ldots) = \begin{cases}
-s \cdot \min_i|a_i| & \text{if all } a_i \text{ 同号} \\
-0 & \text{otherwise}
-\end{cases}, \quad s = \text{sign}(a_1)$$
 
-**自适应行为**：
-- 光滑区：限制器不激活 → 保持 $(P+1)$ 阶精度
-- 激波处：限制器激活 → 降至分段线性（2阶）
 
-**参考函数**：[src_DG/fluid.cpp](src_DG/fluid.cpp) 的 `applyCockburnShuLimiter()`
+##### 2. Zhang-Shu 保持正性限制器 (Positivity-Preserving)
+在极低密度或极高马赫数流场中，数值振荡可能导致负密度或负压力，引发模拟崩溃。
+- **实现步骤**：
+  1. **单元平均值强制正性**：确保 $\bar{\rho} > \rho_{min}$ 且 $\bar{p} > p_{min}$。
+  2. **密度限制**：在 Gauss-Legendre 求积点处检查 $\rho_h(x_{G})$，若小于阈值，则将高阶模态向平均值压缩（Scaling）：
+     $$\theta_\rho = \min \left( 1, \frac{\bar{\rho} - \rho_{min}}{\bar{\rho} - \rho_{min, G}} \right)$$
+  3. **压力限制**：在保证密度的前提下，对压力进行类似的压缩变换，确保全场 $p > 0$。
+- **数学特性**：该限制器是 **保守的 (Conservative)** 且 **高阶不失真 (High-order accurate)**，因为它不改变单元平均值。
 
+##### 3. 边界处理与 Ghost Cells
+- 采用 3 层 Ghost Cells 处理对称、周期或流出边界。
+- 在 `applyLimiter` 循环中，自动跳过边界单元（`bctype != 0`），由专门的边界条件函数更新。
+
+---
+
+##### 实现参考函数
+| 模块 | 函数名 | 位置 |
+| :--- | :--- | :--- |
+| **激波检测** | `applyLimiter()` | `src_DG/fluid.cpp` |
+| **正性修正** | `Zhang-Shu algorithm` | `src_DG/fluid.cpp` |
+| **基函数求值** | `basis(m, xi, eta)` | `src_DG/basis.cpp` |
 #### CFL 稳定条件
 
 $$\Delta t_{\max} = \frac{C}{2(2P+1)} \cdot \frac{h}{\lambda_{\max}}, \quad C = 0.9$$
