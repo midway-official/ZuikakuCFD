@@ -70,20 +70,30 @@ $$
 有限体积更新格式：
 
 $$
-\frac{d\bar{\mathbf{U}}_{i,j}}{dt} = -\frac{1}{\Delta x}\left(\mathbf{F}_{i+1/2,j}^{*} - \mathbf{F}_{i-1/2,j}^{*}\right) - \frac{1}{\Delta y}\left(\mathbf{G}_{i,j+1/2}^{*} - \mathbf{G}_{i,j-1/2}^{*}\right)
+\frac{d\bar{\mathbf{U}}_{i,j}}{dt}
+=
+-\frac{1}{\Delta x}
+\left(
+\mathbf{F}_{i+1/2,j}^{*} - \mathbf{F}_{i-1/2,j}^{*}
+\right)
+-
+\frac{1}{\Delta y}
+\left(
+\mathbf{G}_{i,j+1/2}^{*} - \mathbf{G}_{i,j-1/2}^{*}
+\right)
 $$
-
 其中 $\mathbf{F}_{i+1/2,j}^*$ 和 $\mathbf{G}_{i,j+1/2}^*$ 为数值通量。
 
 ### HLLC Riemann 求解器
 在界面处求解 Riemann 问题，得到数值通量：
 
 $$
-\mathbf{F}^* = \begin{cases} 
-\mathbf{F}_L & \text{if } S_L \ge 0 \\ 
-\mathbf{F}_L^* & \text{if } S_L < 0 \le S^* \\ 
-\mathbf{F}_R^* & \text{if } S^* \le 0 < S_R \\ 
-\mathbf{F}_R & \text{if } S_R \le 0 
+\mathbf{F}^* =
+\begin{cases}
+\mathbf{F}_L & S_L \ge 0 \\
+\mathbf{F}_L^* & S_L < 0 \le S^* \\
+\mathbf{F}_R^* & S^* \le 0 < S_R \\
+\mathbf{F}_R & S_R \le 0
 \end{cases}
 $$
 ---
