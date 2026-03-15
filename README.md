@@ -80,9 +80,9 @@ $$
 
 $$
 \mathbf{F}^* = \begin{cases} 
-\mathbf{F}_L & \text{if } S_L \ge 0 \\
-\mathbf{F}_L^* & \text{if } S_L < 0 \le S^* \\
-\mathbf{F}_R^* & \text{if } S^* \le 0 < S_R \\
+\mathbf{F}_L & \text{if } S_L \ge 0 \\ 
+\mathbf{F}_L^* & \text{if } S_L < 0 \le S^* \\ 
+\mathbf{F}_R^* & \text{if } S^* \le 0 < S_R \\ 
 \mathbf{F}_R & \text{if } S_R \le 0 
 \end{cases}
 $$
