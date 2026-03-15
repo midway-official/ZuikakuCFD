@@ -55,7 +55,7 @@ $$\mathbf{U}^{n+1} = \frac{1}{3}\mathbf{U}^n + \frac{2}{3}\left(\mathbf{U}^{(2)}
 
 其中 $\mathcal{L}(\mathbf{U})$ 为空间离散算子。
 
----
+
 ## 数值方法
 
 ## 方法一：WENO5 有限体积格式
@@ -96,7 +96,7 @@ $$
 \mathbf{F}_R & S_R \le 0
 \end{cases}
 $$
----
+
 
 ### 方法二：DG 间断伽辽金格式
 
