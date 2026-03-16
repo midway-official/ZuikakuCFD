@@ -140,7 +140,7 @@ $$dx\,dy = \frac{h^2}{4} d\xi\,d\eta, \quad ds = \frac{h}{2} d\Gamma_{\text{ref}
 
 $$\varphi_m(\xi,\eta) = L_{p_x}(\xi) \cdot L_{p_y}(\eta), \quad \xi,\eta \in [-1,1]$$
 
-其中 $m = p_{x}(P+1) + p_{y}$，$p_{x}, p_{y} \in [0, P]$，$L_{p}$ 为 $p$ 阶 Legendre 多项式，满足正交性：
+其中 $m = p_{x}(P + 1) + p_{y}$ ， $p_{x}, p_{y} \in [0, P]$ ， $L_{p}$ 为 $p$ 阶 Legendre 多项式，满足正交性：
 
 $$\int_{-1}^1 L_i(\xi) L_j(\xi) d\xi = \frac{2}{2i+1}\delta_{ij}$$
 
