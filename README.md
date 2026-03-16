@@ -114,9 +114,25 @@ $$\mathbf{U}^{n+1} = \frac{1}{3}\mathbf{U}^n + \frac{2}{3}\left(\mathbf{U}^{(2)}
 
 #### 基本理论
 
-DG 方法在每个单元 $K$ 上用多项式族逼近解。对测试函数 $\phi_k$，弱形式为：
+DG 方法在每个单元 $K$ 上用多项式族逼近解。对可压缩 Euler 方程 $\frac{\partial \mathbf{U}}{\partial t} + \nabla \cdot \mathbf{F} = 0$ 在物理单元 $K$（正方形，边长为 $h$）上投影到基函数 $\phi_m$，得到弱形式：
 
-$$\int_K \phi_k \frac{\partial \mathbf{U}}{\partial t} d\mathbf{x} = -\int_K \left(\mathbf{F} \frac{\partial \phi_k}{\partial x} + \mathbf{G} \frac{\partial \phi_k}{\partial y}\right) d\mathbf{x} + \oint_{\partial K} \mathbf{F}^*_{\text{num}} \cdot \mathbf{n} \phi_k \, d\gamma$$
+$$\int_K \phi_m \frac{\partial \mathbf{U}}{\partial t} d\mathbf{x} = \int_K \mathbf{F} \cdot \nabla \phi_m d\mathbf{x} + \int_K \mathbf{G} \cdot \nabla \phi_m d\mathbf{x} - \oint_{\partial K} (\mathbf{F}^* \cdot \mathbf{n}) \phi_m \, ds$$
+
+#### 坐标变换与参考元
+
+为提高计算效率，引入参考坐标 $(\xi, \eta) \in [-1,1]^2$。物理坐标与参考坐标的映射为：
+
+$$x = x_c + \frac{h}{2}\xi, \quad y = y_c + \frac{h}{2}\eta$$
+
+其中 $(x_c, y_c)$ 为单元中心。由此导出的微分关系为：
+
+$$\frac{\partial}{\partial x} = \frac{2}{h}\frac{\partial}{\partial \xi}, \quad \frac{\partial}{\partial y} = \frac{2}{h}\frac{\partial}{\partial \eta}$$
+
+积分测度变换：
+
+$$dx\,dy = \frac{h^2}{4} d\xi\,d\eta, \quad ds = \frac{h}{2} d\Gamma_{\text{ref}}$$
+
+其中 $d\Gamma_{\text{ref}}$ 为参考边界上的弧长元。
 
 #### Legendre 正交基
 
@@ -134,13 +150,119 @@ $$\mathbf{U}_h(\xi,\eta,t) = \sum_{m=0}^{N_M-1} \hat{\mathbf{U}}_m(t) \varphi_m(
 
 其中 $N_M = (P+1)^2$ 为该单元的自由度总数。
 
+#### 质量矩阵与逆矩阵推导
+
+解展开为 $\mathbf{U}_h(\xi,\eta,t) = \sum_{n=0}^{N_M-1} \hat{\mathbf{u}}_n(t) \varphi_n(\xi,\eta)$，代入弱形式左端：
+
+$$(\text{LHS})_m = \int_K \varphi_m \left( \sum_n \frac{d\hat{\mathbf{u}}_n}{dt} \varphi_n \right) d\mathbf{x} = \sum_n \frac{d\hat{\mathbf{u}}_n}{dt} \underbrace{\int_K \varphi_m \varphi_n d\mathbf{x}}_{M_{mn}}$$
+
+利用坐标变换，质量矩阵为：
+
+$$M_{mn} = \frac{h^2}{4} \int_{-1}^1 \int_{-1}^1 [L_{p_{x,m}}(\xi)L_{p_{y,m}}(\eta)] \cdot [L_{p_{x,n}}(\xi)L_{p_{y,n}}(\eta)] d\xi d\eta$$
+
+由于 Legendre 多项式的正交性 $\int_{-1}^1 L_i(\xi)L_j(\xi)d\xi = \frac{2}{2i+1}\delta_{ij}$，质量矩阵为**对角阵**：
+
+$$M_{mm} = \frac{h^2}{4} \cdot \frac{2}{2p_{x,m}+1} \cdot \frac{2}{2p_{y,m}+1} = \frac{h^2}{(2p_{x,m}+1)(2p_{y,m}+1)}$$
+
+其逆矩阵系数为：
+
+$$M_{mm}^{-1} = \frac{(2p_{x,m}+1)(2p_{y,m}+1)}{h^2}$$
+
+代码中的 `invMass(m)` 函数对应数学公式：
+```cpp
+static inline double invMass(int m) noexcept {
+    return (double)((2*mpx(m)+1) * (2*mpy(m)+1));
+}
+```
+
 #### 数值积分
 
-使用 Gauss-Legendre 求积：
-- **体积分**（3×3点）：精确至5次多项式
-- **面积分**（3点）：与多项式阶次匹配
+Gauss-Legendre 求积用于计算弱形式右端的体积分和面积分。
 
-#### 限制器与数值稳定性 (Limiter & Stability)
+**体积分（Volume Integral）**
+
+通过分部积分处理通量项：
+
+$$\int_K \mathbf{F} \cdot \nabla \varphi_m d\mathbf{x} + \int_K \mathbf{G} \cdot \nabla \varphi_m d\mathbf{x}$$
+
+进行坐标变换和引入梯度关系 $\nabla = (\frac{2}{h}\frac{\partial}{\partial\xi}, \frac{2}{h}\frac{\partial}{\partial\eta})$，得到参考空间积分：
+
+$$\int_K \mathbf{F} \cdot \nabla \varphi_m d\mathbf{x} = \frac{h}{2} \int_{-1}^1 \int_{-1}^1 \mathbf{F} \cdot \nabla_\xi \varphi_m \, d\xi d\eta$$
+
+使用 $N_Q = P+1$ 个 Gauss-Legendre 点进行二维求积：
+
+$$(\text{RHS}_{\text{vol}})_m \approx \frac{h}{2} \sum_{qa=0}^{N_Q-1} \sum_{qb=0}^{N_Q-1} w_a w_b \left[ F_m(qa,qb) \frac{\partial \varphi_m}{\partial \xi}\bigg|_{qa,qb} + G_m(qa,qb) \frac{\partial \varphi_m}{\partial \eta}\bigg|_{qa,qb} \right]$$
+
+其中 $w_a, w_b$ 为 Gauss 权重，$F_m, G_m$ 为在求积点处的通量值。代码实现对应：
+
+```cpp
+for (int qa=0; qa<NQ; ++qa) {
+    for (int qb=0; qb<NQ; ++qb) {
+        double ww = GL_WT[qa] * GL_WT[qb];
+        // 计算通量 F, G 和基函数梯度 dphi_dxi, dphi_deta
+        rhs[c][m] += ww * (F[c]*dphi_dxi + G[c]*dphi_deta);
+    }
+}
+```
+
+**面积分（Surface Integral）**
+
+边界项在参考元的四条边上离散。以右边界（$\xi=1$）为例：
+
+$$-\oint_{\text{right}} (F^* \cdot \mathbf{n}) \varphi_m \, ds = -\frac{h}{2} \int_{-1}^1 F^*(\xi=1, \eta) \varphi_m(1, \eta) \, d\eta$$
+
+使用 $N_Q$ 点 Gauss 积分：
+
+$$(\text{RHS}_{\text{edge}})_m \approx -\frac{h}{2} \sum_{q=0}^{N_Q-1} w_q \, F^*_q \varphi_m(1, \eta_q)$$
+
+代码实现对应四条边：
+
+```cpp
+// 右边界 (xi = +1)
+for (int q=0; q<NQ; ++q) {
+    double phi_val = phi2(m, +1.0, GL_PT[q]);
+    rhs[c][m] -= phi_val * GL_WT[q] * Fstar_right[c];
+}
+// 左边界 (xi = -1)
+for (int q=0; q<NQ; ++q) {
+    double phi_val = phi2(m, -1.0, GL_PT[q]);
+    rhs[c][m] += phi_val * GL_WT[q] * Fstar_left[c];
+}
+// 类似处理上下边界（y 方向）
+```
+
+**求积精度**
+
+代码使用 $N_Q = P+1$ 个求积点：
+- 体积分（二维）：精确至 $2P+1$ 次多项式
+- 面积分（一维）：精确至 $P$ 次多项式
+
+对于 DG(P=2) ，使用 $N_Q=3$ 点 Gauss 积分可精确积分 5 次多项式，足以处理线性/二次通量近似。
+
+#### 最终系数更新公式
+
+综合质量矩阵逆、体积分和面积分，模态系数的演化方程为：
+
+$$\frac{d\hat{\mathbf{u}}_m}{dt} = M_{mm}^{-1} \left[ (\text{RHS}_{\text{vol}})_m + (\text{RHS}_{\text{surf}})_m \right]$$
+
+代入前述结果：
+
+$$\frac{d\hat{\mathbf{u}}_m}{dt} = \frac{(2p_x+1)(2p_y+1)}{h^2} \left[ \frac{h}{2} \cdot (\text{rhs}_{\text{code}}) \right] = (\text{rhs}_{\text{code}}) \cdot \underbrace{\frac{(2p_x+1)(2p_y+1)}{2h}}_{\text{Scaling factor}}$$
+
+代码中的完整实现为：
+
+```cpp
+const double inv2h = 0.5 / h;  // 对应公式中的 1/(2h)
+
+for (int m=0; m<N_modes; ++m) {
+    double scale = invMass(m) * inv2h;  // (2px+1)*(2py+1) / (2h)
+    dU[c][m] = rhs[c][m] * scale;
+}
+```
+
+这样保证了从参考空间计算的 `rhs` 值正确转换回物理空间的时间导数。
+
+#### 数值稳定性
 
 为了处理激波捕捉和极值区域的数值稳定性，本程序实现了双重限制机制：
 
