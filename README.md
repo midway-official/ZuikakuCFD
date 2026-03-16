@@ -152,7 +152,8 @@ $$\mathbf{U}_h(\xi,\eta,t) = \sum_{m=0}^{N_M-1} \hat{\mathbf{U}}_m(t) \varphi_m(
 
 #### 质量矩阵与逆矩阵推导
 
-解展开为 $$
+解展开为
+$$
 \mathbf{U}_h(\xi,\eta,t)
 =
 \sum_{n=0}^{N_M-1}
