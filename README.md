@@ -153,12 +153,11 @@ $$\mathbf{U}_h(\xi,\eta,t) = \sum_{m=0}^{N_M-1} \hat{\mathbf{U}}_m(t) \varphi_m(
 #### 质量矩阵与逆矩阵推导
 
 解展开为
+
 $$
-\mathbf{U}_h(\xi,\eta,t)
-=
-\sum_{n=0}^{N_M-1}
-\hat{\mathbf{u}}_n(t)\,\varphi_n(\xi,\eta)
+\boldsymbol{U}_h(\xi, \eta, t) = \sum_{n=0}^{N_M-1} \hat{\boldsymbol{u}}_n(t) \varphi_n(\xi, \eta)
 $$
+
 ，代入弱形式左端：
 
 $$(\text{LHS})_m = \int_K \varphi_m \left( \sum_n \frac{d\hat{\mathbf{u}}_n}{dt} \varphi_n \right) d\mathbf{x} = \sum_n \frac{d\hat{\mathbf{u}}_n}{dt} \underbrace{\int_K \varphi_m \varphi_n d\mathbf{x}}_{M_{mn}}$$
