@@ -511,9 +511,9 @@ jupyter notebook plot.ipynb
 
 #### 结果展示
 
-| WENO5 | DG(P=2) | DG(P=3) |
-|-------|---------|---------|
-| ![WENO5.png](img/WENO5.png) | ![DG2.png](img/DG2.png) | ![DG3.png](img/DG3.png) |
+| WENO5 | DG(P=2) | DG(P=3) | DG(P=4) |
+|-------|---------|---------|---------|
+| ![WENO5.png](img/WENO5.png) | ![DG2.png](img/DG2.png) | ![DG3.png](img/DG3.png) |![DG4.png](img/DG4.png) |
 
 **特点**：
 - **WENO5**：激波锐利、无振荡，但需 3 层 ghost 通信
