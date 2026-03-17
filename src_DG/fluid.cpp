@@ -825,7 +825,9 @@ void applyLimiter(Mesh& mesh)
     const int nx = mesh.nx;
 
     const double kappa = 1.0;  // smooth width
-    const double s0 = -4.0*log10((double)DG_P);
+    double s0;
+    if (DG_P >= 3) s0 = -5.0* log10((double)DG_P); 
+    else s0 = -4.0 * log10((double)DG_P);
 
     const double RHO_MIN = 1e-5;
     const double P_MIN   = 1e-5;
