@@ -37,6 +37,7 @@ static inline double legP(int n, double x) noexcept {
         case 1: return x;
         case 2: return 0.5 * (3.0*x*x - 1.0);
         case 3: return 0.5 * (5.0*x*x*x - 3.0*x);
+        case 4: return 0.125 * (35.0*x*x*x*x - 30.0*x*x + 3.0);
         default: return 0.0;
     }
 }
@@ -48,6 +49,7 @@ static inline double legD(int n, double x) noexcept {
         case 1: return 1.0;
         case 2: return 3.0 * x;
         case 3: return 0.5 * (15.0*x*x - 3.0);
+        case 4: return 0.5 * (35.0*x*x*x - 15.0*x);
         default: return 0.0;
     }
 }
@@ -662,7 +664,7 @@ void computeRHS(Mesh& mesh, double dt,
         for (int m = 0; m < DG_NM; ++m)
             dU[c][m] = MatrixXd::Zero(ny, nx);
 
-    // 填充固壁 ghost（MPI ghost 已由 exchangeConservativeColumns 填充）
+    // 填充 ghost（MPI ghost 已由 exchangeConservativeColumns 填充）
     fillDGGhostCells(mesh);
 
     // ── 在单元 (i,j) 的参考坐标 (xi,eta) 处重建 U ─────────────────────────
